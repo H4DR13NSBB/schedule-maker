@@ -5282,8 +5282,12 @@ function employeePeriodSummary(emp, from, to){
       r.satPlanned++;
       if(!state.weeks[wk].shifts.some(function(s){ return s.employeeId===emp.id && s.date===ds; })) r.satOff++;
     }
-    // Absence days count Monday–Friday only, public holidays excluded.
-    if(dow>=1 && dow<=5 && !holiday){
+    // Absence days count Monday–Friday only, public holidays excluded, and only on days this
+    // employee would actually have worked -- someone on a reduced schedule (e.g. 80% = 4 work days/
+    // week via a recurring day off) isn't charged a vacation day for their day off same as everyone
+    // else isn't charged for a Saturday or Sunday. Same rule for every contract type (salaried or
+    // hourly): the recurring-day-off pattern is what actually drives how many days a week they work.
+    if(dow>=1 && dow<=5 && !holiday && (emp.recurringDaysOff||[]).indexOf(dow)<0){
       (emp.absences||[]).forEach(function(ab){
         if(ab.startTime || ds<ab.startDate || ds>ab.endDate) return;
         if(ab.type==="vacation") r.vacation++; else if(ab.type==="dayoff") r.dayoff++; else if(ab.type==="sick") r.sick++; else r.unavailable++;
@@ -5477,13 +5481,13 @@ function renderLeaveTabEmployee(el){
     html+="</tbody></table>";
   }
   el.innerHTML=html;
-  document.getElementById("lr-send").addEventListener("click", function(){
-    var type=document.getElementById("lr-type").value;
-    var start=document.getElementById("lr-start").value, end=document.getElementById("lr-end").value;
+  el.querySelector("#lr-send").addEventListener("click", function(){
+    var type=el.querySelector("#lr-type").value;
+    var start=el.querySelector("#lr-start").value, end=el.querySelector("#lr-end").value;
     if(!start || !end){ alert("Choisissez une date de début et de fin."); return; }
     if(end<start){ alert("La date de fin doit être après la date de début."); return; }
-    var note=document.getElementById("lr-note").value.trim();
-    var btn=document.getElementById("lr-send"); btn.disabled=true;
+    var note=el.querySelector("#lr-note").value.trim();
+    var btn=el.querySelector("#lr-send"); btn.disabled=true;
     sb.from("leave_requests").insert({employee_id:empId, type:type, start_date:start, end_date:end, note:note, status:"pending"}).then(function(res){
       if(res.error){ alert("Erreur : "+res.error.message); btn.disabled=false; return; }
       return loadLeaveRequests().then(function(){ renderLeaveTabEmployee(el); });
@@ -5662,7 +5666,7 @@ function updatePrintButtonLabel(){
   btn.textContent = n===0 ? "Aucun magasin à imprimer" : n===1 ? "Imprimer le magasin" : "Imprimer les "+n+" magasins";
 }
 
-function renderAll(){ renderSetup(); renderSchedule(); renderData(); if(currentProfile && currentProfile.employee_id) renderMyPage(); }
+function renderAll(){ renderSetup(); renderSchedule(); renderData(); if(currentProfile && currentProfile.employee_id && currentProfile.role!=="employee") renderMyPage(); }
 
 function switchTab(tab){
   document.querySelectorAll(".tab-btn").forEach(function(b){ b.classList.toggle("active", b.getAttribute("data-tab")===tab); });
