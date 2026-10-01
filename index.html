@@ -5406,6 +5406,7 @@ function renderData(){
 /* ---------- Leave requests (vacances / congé) ---------- */
 var LEAVE_TYPE_LABELS={vacation:"Vacances", dayoff:"Congé", unavailable:"Indisponibilité", sick:"Maladie"};
 var LEAVE_STATUS_LABELS={pending:"En attente", approved:"Approuvée", rejected:"Refusée"};
+var leaveFilter={employee:"", type:"", status:""}; // staff "Demandes" tab only -- not persisted
 function renderLeaveTab(){
   var el=document.getElementById("card-leave");
   if(!currentProfile) return;
@@ -5413,32 +5414,73 @@ function renderLeaveTab(){
   else renderLeaveTabStaff(el);
 }
 // Admin and manager both decide (a manager's fetch is already scoped to their own store by the
-// database's row rules, same as the employee list).
+// database's row rules, same as the employee list). Requests whose last day is already past are
+// tucked into a collapsed section -- still there for the record, just out of the way day to day.
 function renderLeaveTabStaff(el){
   var canDecide=currentProfile.role==="admin" || currentProfile.role==="manager";
   var html="<h2>Demandes de congé</h2>";
   if(!leaveRequests.length){ html+="<p class='empty-note'>Aucune demande.</p>"; el.innerHTML=html; return; }
-  var sorted=leaveRequests.slice().sort(function(a,b){
+  var today=dateStr(new Date());
+  var empOptions=Array.from(new Set(leaveRequests.map(function(r){ return r.employee_id; })))
+    .map(function(id){ var e=getEmployee(id); return {id:id, name:e?e.name:id}; })
+    .sort(function(a,b){ return a.name.localeCompare(b.name); });
+  html+="<div class='row' style='align-items:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap'>";
+  html+="<div class='field' style='flex:none;width:180px'><label>Employé</label><select id='lf-emp'><option value=''>Tous</option>"+
+    empOptions.map(function(o){ return "<option value='"+o.id+"' "+(leaveFilter.employee===o.id?"selected":"")+">"+escAttr(o.name)+"</option>"; }).join("")+"</select></div>";
+  html+="<div class='field' style='flex:none;width:150px'><label>Type</label><select id='lf-type'><option value=''>Tous</option>"+
+    Object.keys(LEAVE_TYPE_LABELS).map(function(t){ return "<option value='"+t+"' "+(leaveFilter.type===t?"selected":"")+">"+LEAVE_TYPE_LABELS[t]+"</option>"; }).join("")+"</select></div>";
+  html+="<div class='field' style='flex:none;width:150px'><label>Statut</label><select id='lf-status'><option value=''>Tous</option>"+
+    Object.keys(LEAVE_STATUS_LABELS).map(function(s){ return "<option value='"+s+"' "+(leaveFilter.status===s?"selected":"")+">"+LEAVE_STATUS_LABELS[s]+"</option>"; }).join("")+"</select></div>";
+  if(leaveFilter.employee || leaveFilter.type || leaveFilter.status) html+="<div class='field' style='flex:none'><button class='btn btn-sm' id='lf-reset'>Réinitialiser</button></div>";
+  html+="</div>";
+
+  var filtered=leaveRequests.filter(function(r){
+    return (!leaveFilter.employee || r.employee_id===leaveFilter.employee)
+      && (!leaveFilter.type || r.type===leaveFilter.type)
+      && (!leaveFilter.status || r.status===leaveFilter.status);
+  });
+  function sortRank(a,b){
     var rank={pending:0, approved:1, rejected:2};
     if(rank[a.status]!==rank[b.status]) return rank[a.status]-rank[b.status];
     return a.start_date<b.start_date?1:-1;
-  });
-  html+="<table><thead><tr><th>Employé</th><th>Type</th><th>Du</th><th>Au</th><th># jours</th><th>Note</th><th>Statut</th>"+(canDecide?"<th></th>":"")+"</tr></thead><tbody>";
-  sorted.forEach(function(r){
-    var emp=getEmployee(r.employee_id);
-    html+="<tr data-lr='"+r.id+"'><td>"+(emp?escAttr(emp.name):r.employee_id)+"</td>"+
-      "<td>"+(LEAVE_TYPE_LABELS[r.type]||r.type)+"</td><td>"+r.start_date+"</td><td>"+r.end_date+"</td>"+
-      "<td class='num'>"+(emp?countLeaveDays(emp, r.start_date, r.end_date):"—")+"</td>"+
-      "<td>"+escAttr(r.note||"")+"</td><td><span class='leave-status "+r.status+"'>"+LEAVE_STATUS_LABELS[r.status]+"</span></td>";
-    if(canDecide){
-      html+="<td class='row-actions'>"+(r.status==="pending" ?
-        "<button class='btn btn-sm' data-action='approve'>Approuver</button> <button class='btn btn-sm btn-danger' data-action='reject'>Refuser</button>" :
-        "<button class='btn btn-sm' data-action='reopen'>Remettre en attente</button>")+"</td>";
-    }
-    html+="</tr>";
-  });
-  html+="</tbody></table>";
+  }
+  var upcoming=filtered.filter(function(r){ return r.end_date>=today; }).sort(sortRank);
+  var past=filtered.filter(function(r){ return r.end_date<today; }).sort(sortRank);
+  function rowsTable(list){
+    var h="<table><thead><tr><th>Employé</th><th>Type</th><th>Du</th><th>Au</th><th># jours</th><th>Note</th><th>Statut</th>"+(canDecide?"<th></th>":"")+"</tr></thead><tbody>";
+    list.forEach(function(r){
+      var emp=getEmployee(r.employee_id);
+      h+="<tr data-lr='"+r.id+"'><td>"+(emp?escAttr(emp.name):r.employee_id)+"</td>"+
+        "<td>"+(LEAVE_TYPE_LABELS[r.type]||r.type)+"</td><td>"+r.start_date+"</td><td>"+r.end_date+"</td>"+
+        "<td class='num'>"+(emp?countLeaveDays(emp, r.start_date, r.end_date):"—")+"</td>"+
+        "<td>"+escAttr(r.note||"")+"</td><td><span class='leave-status "+r.status+"'>"+LEAVE_STATUS_LABELS[r.status]+"</span>"+
+        (r.cancel_requested?" <span class='leave-status pending' title=\"L'employé(e) a demandé l'annulation de ce congé déjà approuvé\">Annulation demandée</span>":"")+"</td>";
+      if(canDecide){
+        var actions = r.cancel_requested ?
+          "<button class='btn btn-sm btn-danger' data-action='confirm-cancel'>Confirmer l'annulation</button> <button class='btn btn-sm' data-action='keep'>Garder</button>" :
+          r.status==="pending" ?
+          "<button class='btn btn-sm' data-action='approve'>Approuver</button> <button class='btn btn-sm btn-danger' data-action='reject'>Refuser</button>" :
+          "<button class='btn btn-sm' data-action='reopen'>Remettre en attente</button>";
+        h+="<td class='row-actions'>"+actions+"</td>";
+      }
+      h+="</tr>";
+    });
+    h+="</tbody></table>";
+    return h;
+  }
+  if(!filtered.length) html+="<p class='empty-note'>Aucune demande ne correspond aux filtres.</p>";
+  else {
+    html+=upcoming.length ? rowsTable(upcoming) : "<p class='empty-note'>Aucune demande à venir.</p>";
+    if(past.length) html+="<details style='margin-top:14px'><summary class='setup-group-title'>Demandes passées ("+past.length+")</summary>"+rowsTable(past)+"</details>";
+  }
   el.innerHTML=html;
+  function filterSelect(id, key){
+    var sel=el.querySelector(id);
+    if(sel) sel.addEventListener("change", function(){ leaveFilter[key]=sel.value; renderLeaveTab(); });
+  }
+  filterSelect("#lf-emp", "employee"); filterSelect("#lf-type", "type"); filterSelect("#lf-status", "status");
+  var resetBtn=el.querySelector("#lf-reset");
+  if(resetBtn) resetBtn.addEventListener("click", function(){ leaveFilter={employee:"", type:"", status:""}; renderLeaveTab(); });
   if(!canDecide) return;
   el.querySelectorAll("tr[data-lr]").forEach(function(tr){
     var id=tr.getAttribute("data-lr");
@@ -5448,6 +5490,21 @@ function renderLeaveTabStaff(el){
     if(rejectBtn) rejectBtn.addEventListener("click", function(){ decideLeaveRequest(id, "rejected").then(renderLeaveTab).catch(function(){}); });
     var reopenBtn=tr.querySelector("[data-action=reopen]");
     if(reopenBtn) reopenBtn.addEventListener("click", function(){ decideLeaveRequest(id, "pending").then(renderLeaveTab).catch(function(){}); });
+    var confirmCancelBtn=tr.querySelector("[data-action=confirm-cancel]");
+    if(confirmCancelBtn) confirmCancelBtn.addEventListener("click", function(){
+      if(!confirm("Confirmer l'annulation de ce congé déjà approuvé ?")) return;
+      sb.from("leave_requests").update({status:"rejected", cancel_requested:false}).eq("id", id).then(function(res){
+        if(res.error){ alert("Erreur : "+res.error.message); return; }
+        return loadLeaveRequests().then(renderLeaveTab);
+      });
+    });
+    var keepBtn=tr.querySelector("[data-action=keep]");
+    if(keepBtn) keepBtn.addEventListener("click", function(){
+      sb.from("leave_requests").update({cancel_requested:false}).eq("id", id).then(function(res){
+        if(res.error){ alert("Erreur : "+res.error.message); return; }
+        return loadLeaveRequests().then(renderLeaveTab);
+      });
+    });
   });
 }
 function decideLeaveRequest(id, status){
@@ -5494,10 +5551,12 @@ function renderLeaveTabEmployee(el){
   else {
     html+="<table><thead><tr><th>Type</th><th>Du</th><th>Au</th><th># jours</th><th>Note</th><th>Statut</th><th></th></tr></thead><tbody>";
     mine.slice().sort(function(a,b){ return a.start_date<b.start_date?1:-1; }).forEach(function(r){
+      var action = r.status==="pending" ? "<button class='icon-btn' data-action='withdraw' title='Retirer'>✕</button>" :
+        r.status==="approved" ? (r.cancel_requested ? "<span class='hint'>Annulation demandée</span>" : "<button class='btn btn-sm' data-action='cancel-req'>Annuler</button>") : "";
       html+="<tr data-lr='"+r.id+"'><td>"+(LEAVE_TYPE_LABELS[r.type]||r.type)+"</td><td>"+r.start_date+"</td><td>"+r.end_date+"</td>"+
         "<td class='num'>"+countLeaveDays(emp, r.start_date, r.end_date)+"</td>"+
         "<td>"+escAttr(r.note||"")+"</td><td><span class='leave-status "+r.status+"'>"+LEAVE_STATUS_LABELS[r.status]+"</span></td>"+
-        "<td>"+(r.status==="pending"?"<button class='icon-btn' data-action='withdraw'>✕</button>":"")+"</td></tr>";
+        "<td>"+action+"</td></tr>";
     });
     html+="</tbody></table>";
   }
@@ -5519,6 +5578,16 @@ function renderLeaveTabEmployee(el){
       var id=btn.closest("[data-lr]").getAttribute("data-lr");
       if(!confirm("Retirer cette demande ?")) return;
       sb.from("leave_requests").delete().eq("id", id).then(function(res){
+        if(res.error){ alert("Erreur : "+res.error.message); return; }
+        return loadLeaveRequests().then(function(){ renderLeaveTabEmployee(el); });
+      });
+    });
+  });
+  el.querySelectorAll("[data-action=cancel-req]").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var id=btn.closest("[data-lr]").getAttribute("data-lr");
+      if(!confirm("Demander l'annulation de ce congé ? Il reste approuvé jusqu'à ce qu'un responsable confirme l'annulation.")) return;
+      sb.from("leave_requests").update({cancel_requested:true}).eq("id", id).then(function(res){
         if(res.error){ alert("Erreur : "+res.error.message); return; }
         return loadLeaveRequests().then(function(){ renderLeaveTabEmployee(el); });
       });
