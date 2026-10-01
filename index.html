@@ -5492,8 +5492,8 @@ function renderLeaveTabStaff(el){
     if(reopenBtn) reopenBtn.addEventListener("click", function(){ decideLeaveRequest(id, "pending").then(renderLeaveTab).catch(function(){}); });
     var confirmCancelBtn=tr.querySelector("[data-action=confirm-cancel]");
     if(confirmCancelBtn) confirmCancelBtn.addEventListener("click", function(){
-      if(!confirm("Confirmer l'annulation de ce congé déjà approuvé ?")) return;
-      sb.from("leave_requests").update({status:"rejected", cancel_requested:false}).eq("id", id).then(function(res){
+      if(!confirm("Confirmer l'annulation de ce congé déjà approuvé ? La demande sera supprimée définitivement.")) return;
+      sb.from("leave_requests").delete().eq("id", id).then(function(res){
         if(res.error){ alert("Erreur : "+res.error.message); return; }
         return loadLeaveRequests().then(renderLeaveTab);
       });
