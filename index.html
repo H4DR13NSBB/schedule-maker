@@ -2093,7 +2093,9 @@ function countLeaveDays(emp, startDate, endDate){
     var ds=dateStr(d), dow=d.getDay();
     if(dow<1 || dow>5) continue;
     if(employeeObservesHoliday(emp, ds)) continue;
-    if((emp.recurringDaysOff||[]).indexOf(dow)>=0) continue;
+    // recurringDaysOff uses the app's own Monday=0..Sunday=6 numbering (dowFromDate), not
+    // Date#getDay()'s Sunday=0 -- comparing dow directly here would silently shift it by a day.
+    if((emp.recurringDaysOff||[]).indexOf(dowFromDate(d))>=0) continue;
     n++;
   }
   return n;
@@ -5302,7 +5304,9 @@ function employeePeriodSummary(emp, from, to){
     // week via a recurring day off) isn't charged a vacation day for their day off same as everyone
     // else isn't charged for a Saturday or Sunday. Same rule for every contract type (salaried or
     // hourly): the recurring-day-off pattern is what actually drives how many days a week they work.
-    if(dow>=1 && dow<=5 && !holiday && (emp.recurringDaysOff||[]).indexOf(dow)<0){
+    // recurringDaysOff uses Monday=0..Sunday=6 (dowFromDate), not getDay()'s Sunday=0 -- compare
+    // the right one or this silently excludes/includes the wrong weekday.
+    if(dow>=1 && dow<=5 && !holiday && (emp.recurringDaysOff||[]).indexOf(dowFromDate(d))<0){
       (emp.absences||[]).forEach(function(ab){
         if(ab.startTime || ds<ab.startDate || ds>ab.endDate) return;
         if(ab.type==="vacation") r.vacation++; else if(ab.type==="dayoff") r.dayoff++; else if(ab.type==="sick") r.sick++; else r.unavailable++;
