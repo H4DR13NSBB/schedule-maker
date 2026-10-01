@@ -2083,6 +2083,21 @@ function employeeObservesHoliday(emp, ds){
   if(!regular.length) return false;
   return regular.every(function(st){ return todays.some(function(h){ return holidayAppliesToStore(h, st.id); }); });
 }
+// How many days a leave request/absence actually costs: weekdays only, minus public holidays and
+// this employee's own recurring day off -- e.g. Tuesday through the following Tuesday is 6 days,
+// not 8, since the two weekend days in between were never going to be worked either way. Same rule
+// used to tally the yearly vacation balance (employeePeriodSummary).
+function countLeaveDays(emp, startDate, endDate){
+  var n=0;
+  for(var d=parseDateStr(startDate); dateStr(d)<=endDate; d.setDate(d.getDate()+1)){
+    var ds=dateStr(d), dow=d.getDay();
+    if(dow<1 || dow>5) continue;
+    if(employeeObservesHoliday(emp, ds)) continue;
+    if((emp.recurringDaysOff||[]).indexOf(dow)>=0) continue;
+    n++;
+  }
+  return n;
+}
 function buildDemandGrid(weekKey){
   var dates=weekDates(weekKey).map(dateStr);
   var demand={};
@@ -5404,11 +5419,12 @@ function renderLeaveTabStaff(el){
     if(rank[a.status]!==rank[b.status]) return rank[a.status]-rank[b.status];
     return a.start_date<b.start_date?1:-1;
   });
-  html+="<table><thead><tr><th>Employé</th><th>Type</th><th>Du</th><th>Au</th><th>Note</th><th>Statut</th>"+(canDecide?"<th></th>":"")+"</tr></thead><tbody>";
+  html+="<table><thead><tr><th>Employé</th><th>Type</th><th>Du</th><th>Au</th><th># jours</th><th>Note</th><th>Statut</th>"+(canDecide?"<th></th>":"")+"</tr></thead><tbody>";
   sorted.forEach(function(r){
     var emp=getEmployee(r.employee_id);
     html+="<tr data-lr='"+r.id+"'><td>"+(emp?escAttr(emp.name):r.employee_id)+"</td>"+
       "<td>"+(LEAVE_TYPE_LABELS[r.type]||r.type)+"</td><td>"+r.start_date+"</td><td>"+r.end_date+"</td>"+
+      "<td class='num'>"+(emp?countLeaveDays(emp, r.start_date, r.end_date):"—")+"</td>"+
       "<td>"+escAttr(r.note||"")+"</td><td><span class='leave-status "+r.status+"'>"+LEAVE_STATUS_LABELS[r.status]+"</span></td>";
     if(canDecide){
       html+="<td class='row-actions'>"+(r.status==="pending" ?
@@ -5445,7 +5461,7 @@ function renderLeaveTabEmployee(el){
   var html="<h2>Mes demandes</h2>";
   html+="<p class='hint'>Une demande de <b>congé</b> est une absence ponctuelle et ne compte pas sur vos jours de vacances ; une demande de <b>vacances</b> est déduite de votre solde annuel.</p>";
   html+="<div class='row' style='max-width:640px;flex-wrap:wrap;align-items:flex-end'>";
-  html+="<div class='field' style='flex:none;width:140px'><label>Type</label><select id='lr-type'><option value='dayoff'>Congé</option><option value='vacation'>Vacances</option></select></div>";
+  html+="<div class='field' style='flex:none;width:140px'><label>Type</label><select id='lr-type'><option value='vacation'>Vacances</option><option value='dayoff'>Congé</option></select></div>";
   html+="<div class='field' style='flex:none'><label>Du</label><input type='date' id='lr-start' value='"+today+"'></div>";
   html+="<div class='field' style='flex:none'><label>Au</label><input type='date' id='lr-end' value='"+today+"'></div>";
   html+="<div class='field'><label>Note (optionnel)</label><input type='text' id='lr-note' placeholder='p.ex. rendez-vous médical'></div>";
@@ -5459,10 +5475,10 @@ function renderLeaveTabEmployee(el){
   var absences=(emp.absences||[]).slice().sort(function(a,b){ return a.startDate<b.startDate?-1:1; });
   if(!absences.length) html+="<p class='empty-note'>Aucune absence enregistrée.</p>";
   else {
-    html+="<table><thead><tr><th>Type</th><th>Du</th><th>Au</th><th>Note</th></tr></thead><tbody>";
+    html+="<table><thead><tr><th>Type</th><th>Du</th><th>Au</th><th># jours</th><th>Note</th></tr></thead><tbody>";
     absences.forEach(function(a){
       var past=a.endDate<today;
-      html+="<tr"+(past?" style='opacity:.5'":"")+"><td>"+(LEAVE_TYPE_LABELS[a.type]||a.type)+"</td><td>"+a.startDate+"</td><td>"+a.endDate+"</td><td>"+escAttr(a.note||"")+"</td></tr>";
+      html+="<tr"+(past?" style='opacity:.5'":"")+"><td>"+(LEAVE_TYPE_LABELS[a.type]||a.type)+"</td><td>"+a.startDate+"</td><td>"+a.endDate+"</td><td class='num'>"+countLeaveDays(emp, a.startDate, a.endDate)+"</td><td>"+escAttr(a.note||"")+"</td></tr>";
     });
     html+="</tbody></table>";
   }
@@ -5472,9 +5488,10 @@ function renderLeaveTabEmployee(el){
   var mine=leaveRequests.filter(function(r){ return r.employee_id===empId; });
   if(!mine.length) html+="<p class='empty-note'>Aucune demande envoyée.</p>";
   else {
-    html+="<table><thead><tr><th>Type</th><th>Du</th><th>Au</th><th>Note</th><th>Statut</th><th></th></tr></thead><tbody>";
+    html+="<table><thead><tr><th>Type</th><th>Du</th><th>Au</th><th># jours</th><th>Note</th><th>Statut</th><th></th></tr></thead><tbody>";
     mine.slice().sort(function(a,b){ return a.start_date<b.start_date?1:-1; }).forEach(function(r){
       html+="<tr data-lr='"+r.id+"'><td>"+(LEAVE_TYPE_LABELS[r.type]||r.type)+"</td><td>"+r.start_date+"</td><td>"+r.end_date+"</td>"+
+        "<td class='num'>"+countLeaveDays(emp, r.start_date, r.end_date)+"</td>"+
         "<td>"+escAttr(r.note||"")+"</td><td><span class='leave-status "+r.status+"'>"+LEAVE_STATUS_LABELS[r.status]+"</span></td>"+
         "<td>"+(r.status==="pending"?"<button class='icon-btn' data-action='withdraw'>✕</button>":"")+"</td></tr>";
     });
