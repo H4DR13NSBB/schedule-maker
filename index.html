@@ -516,9 +516,8 @@ body.role-employee .day-body{cursor:default;}
         <div class="action-controls">
           <button class="btn btn-sm" id="btn-generate" title="Remplit les manques de la semaine en gardant les créneaux déjà placés (y compris vos ajustements). Pour repartir de zéro : « Effacer proposition » puis générer.">Générer / compléter</button>
           <button class="btn btn-sm" id="btn-generate-month" title="Génère / complète la semaine affichée et les suivantes jusqu'à la fin du mois, en attribuant d'abord un samedi libre à chaque employé. Les semaines passées ne sont pas modifiées.">Générer le mois</button>
-          <!-- TEMP (test): generate a whole year to try out the Données tab — remove when no longer needed -->
-          <button class="btn btn-sm" id="btn-generate-year" style="border-style:dashed" title="Temporaire, pour tester : génère / complète toutes les semaines de l'année affichée, y compris les semaines passées.">Générer l'année (test)</button>
           <button class="btn btn-sm" id="btn-sync-fixed">Actualiser horaires fixes</button>
+          <button class="btn btn-sm" id="btn-generate-year" style="border-style:dashed" title="Génère / complète toutes les semaines de l'année affichée, y compris les semaines passées.">Générer l'année</button>
         </div>
       </div>
       <div class="action-section">
@@ -1030,13 +1029,15 @@ function weeksOfMonth(year, month){
 }
 function isWeekFrozen(weekKey){ var w=state.weeks[weekKey]; return !!(w && w.frozen); }
 var FROZEN_MSG="Cette semaine est figée (déjà imprimée / envoyée). Décochez « Semaine figée » en haut pour la modifier.";
-function weekHasAutoShifts(weekKey){
+// `scope`, when given, restricts the check to those store id(s) -- generation only ever touches the
+// currently selected store, so "already has a proposal" shouldn't be triggered by another store's.
+function weekHasAutoShifts(weekKey, scope){
   var w=state.weeks[weekKey];
-  return !!(w && (w.shifts||[]).some(function(s){ return s.source==="auto"; }));
+  return !!(w && (w.shifts||[]).some(function(s){ return s.source==="auto" && (!scope || scope.indexOf(s.storeId)>=0); }));
 }
 // Weeks after `weekKey` that already hold a generated proposal.
-function laterGeneratedWeeks(weekKey){
-  return Object.keys(state.weeks).filter(function(k){ return k>weekKey && weekHasAutoShifts(k) && !isWeekFrozen(k); }).sort();
+function laterGeneratedWeeks(weekKey, scope){
+  return Object.keys(state.weeks).filter(function(k){ return k>weekKey && weekHasAutoShifts(k, scope) && !isWeekFrozen(k); }).sort();
 }
 function planFreeSaturdays(year, month, inRangeWeeks, assigned, notPossible){
   var saturdays=saturdaysInMonth(year, month).map(dateStr);
@@ -1125,14 +1126,11 @@ function askChoice(title, text, choices, onPick){
    proposal are redone too; the month button stays within its month and only warns instead. */
 function runGeneration(baseWeeks, scopeLabel, askLater, skipWarning){
   var lastBase=baseWeeks[baseWeeks.length-1];
-  var later=laterGeneratedWeeks(lastBase);
+  var guardScope = genGuardScope();
+  var later=laterGeneratedWeeks(lastBase, guardScope);
   function go(weekKeys){
     // Collapse the per-week saves into a single undo step.
     var before=lastSavedJSON, undoDepth=undoStack.length;
-    // A store admin's generation must not touch other stores' shifts: the solver itself has no
-    // notion of store scope (it runs over the whole week), so snapshot every other store's shifts
-    // first and restore them afterward, discarding whatever the solver computed for them.
-    var guardScope = isStoreAdmin() ? managerStoreIds() : null;
     var guardSnapshot = guardScope ? weekKeys.map(function(wk){
       var w=getWeek(wk); return {wk:wk, other:w.shifts.filter(function(s){ return guardScope.indexOf(s.storeId)<0; })};
     }) : null;
@@ -1140,6 +1138,14 @@ function runGeneration(baseWeeks, scopeLabel, askLater, skipWarning){
     if(guardSnapshot) guardSnapshot.forEach(function(sn){
       var w=getWeek(sn.wk); w.shifts = w.shifts.filter(function(s){ return guardScope.indexOf(s.storeId)>=0; }).concat(sn.other);
     });
+    if(guardScope){
+      // The solver ran (and counted) over every store; now that the non-scoped stores' shifts are
+      // back to what they were, recount from what's actually left so the summary matches reality.
+      r.gaps = r.gaps.filter(function(g){ return guardScope.indexOf(g.storeId)>=0; });
+      r.autoCount = weekKeys.reduce(function(n, wk){
+        return n + getWeek(wk).shifts.filter(function(s){ return s.source==="auto" && guardScope.indexOf(s.storeId)>=0; }).length;
+      }, 0);
+    }
     undoStack.length=undoDepth; undoStack.push(before);
     window.__lastGaps=r.gaps;
     renderSchedule();
@@ -1154,7 +1160,7 @@ function runGeneration(baseWeeks, scopeLabel, askLater, skipWarning){
   }
   if(!askLater){
     // Weeks of the range (other than the one shown) that already hold a proposal get completed too.
-    var touched=baseWeeks.filter(function(wk){ return wk!==state.ui.currentWeekKey && weekHasAutoShifts(wk) && !isWeekFrozen(wk); });
+    var touched=baseWeeks.filter(function(wk){ return wk!==state.ui.currentWeekKey && weekHasAutoShifts(wk, guardScope) && !isWeekFrozen(wk); });
     if(touched.length && !skipWarning && !confirm("Les semaines "+touched.join(", ")+" contiennent déjà une proposition : elles seront aussi complétées / ajustées (samedis libres compris). Les créneaux placés à la main sont conservés, et aucune autre semaine n'est modifiée.\n\nContinuer ?")) return;
     go(baseWeeks);
     return;
@@ -1445,6 +1451,11 @@ function isStoreAdmin(){ return isManager() && !!currentProfile.store_admin; }
 function isTrueAdmin(){ return !!(currentProfile && currentProfile.role==="admin"); }
 // Has admin-level UI access (full admin, or a store-admin manager) -- still store-scoped for the latter.
 function hasAdminAccess(){ return isTrueAdmin() || isStoreAdmin(); }
+// Generate / Effacer / Actualiser horaires fixes all act on just the currently selected store tab,
+// for everyone (not only a store admin) -- the solver itself has no notion of store scope (it runs
+// over the whole week), so every entry point snapshots every other store's shifts first and
+// restores them afterward, discarding whatever the solver computed for them.
+function genGuardScope(){ return state.ui.currentStoreId ? [state.ui.currentStoreId] : null; }
 // Planning scope for the signed-in person: a manager's own store(s), an employee's own store(s)
 // (wherever their storeAccess allows working), or null for admin/offline (no restriction).
 function myStoreScope(){
@@ -5842,7 +5853,7 @@ function startApp(){
   document.getElementById("btn-sync-fixed").addEventListener("click", function(){
     if(isWeekFrozen(state.ui.currentWeekKey)){ alert(FROZEN_MSG); return; }
     var week=getWeek(state.ui.currentWeekKey);
-    var fixScope = isStoreAdmin() ? managerStoreIds() : null;
+    var fixScope = genGuardScope();
     var fixSnapshot = fixScope ? week.shifts.filter(function(s){ return fixScope.indexOf(s.storeId)<0; }) : null;
     var beforeCount=week.shifts.filter(function(s){return s.source==="fixed" && (!fixScope || fixScope.indexOf(s.storeId)>=0);}).length;
     week.fixedSynced=false;
@@ -5868,7 +5879,7 @@ function startApp(){
   document.getElementById("btn-generate-year").addEventListener("click", function(){
     var year=weekMonth(state.ui.currentWeekKey).year, weeks=[];
     for(var m=0;m<12;m++) weeks=weeks.concat(weeksOfMonth(year, m));
-    if(!confirm("TEST — générer / compléter les "+weeks.length+" semaines de "+year+", y compris les semaines passées ?\nCela peut prendre un moment. « Annuler » en haut annule tout d'un coup.")) return;
+    if(!confirm("Générer / compléter les "+weeks.length+" semaines de "+year+", y compris les semaines passées ?\nCela peut prendre un moment. « Annuler » en haut annule tout d'un coup.")) return;
     runGeneration(weeks, "L'année "+year, false, true); // already confirmed above
   });
   // Clears generated shifts over the chosen range; frozen weeks are always left untouched.
@@ -5880,13 +5891,13 @@ function startApp(){
       return true;
     });
     var frozen=weeks.filter(isWeekFrozen);
-    weeks=weeks.filter(function(wk){ return !isWeekFrozen(wk) && weekHasAutoShifts(wk); }).sort();
+    weeks=weeks.filter(function(wk){ return !isWeekFrozen(wk) && weekHasAutoShifts(wk, genGuardScope()); }).sort();
     if(!weeks.length){ alert(frozen.length ? "Rien à effacer (semaine(s) figée(s) : "+frozen.join(", ")+")." : "Aucune proposition à effacer sur cette période."); return; }
     var what = weeks.length===1 ? "la semaine "+weeks[0] : "les "+weeks.length+" semaines ("+weeks[0]+" à "+weeks[weeks.length-1]+")";
     if(!confirm("Effacer les créneaux générés automatiquement pour "+what+" ?"+(frozen.length?"\nLes semaines figées ("+frozen.join(", ")+") ne sont pas touchées.":"")+"\nLes horaires fixes et les créneaux placés à la main restent.")) return;
     // One undo step for the whole range.
     var before=lastSavedJSON, undoDepth=undoStack.length;
-    var clearScope = isStoreAdmin() ? managerStoreIds() : null;
+    var clearScope = genGuardScope();
     var clearSnapshot = clearScope ? weeks.map(function(wk){
       var w=getWeek(wk); return {wk:wk, other:w.shifts.filter(function(s){ return clearScope.indexOf(s.storeId)<0; })};
     }) : null;
