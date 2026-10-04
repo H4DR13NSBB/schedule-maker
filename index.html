@@ -5398,6 +5398,13 @@ function employeePeriodSummary(emp, from, to){
     if(adj.targetOverrideMinutes==null) t-=(adj.rattrapageMinutes||0)+(adj.autoCarryMinutes||0)+(adj.yearCarryMinutes||0);
     r.target+=t;
   }
+  // A flexible (worksFromHome) employee's confirmed logged hours ("Mes heures") count as worked
+  // too -- their weeks usually hold no shift rows at all (weekIsPlanned above would otherwise skip
+  // them entirely), so without this their logged time would never show up here.
+  var loggedDates={};
+  hourLogs.filter(function(h){ return h.employee_id===emp.id && h.status==="approved" && h.log_date>=from && h.log_date<=to; })
+    .forEach(function(h){ r.worked+=Math.round(h.hours*60); loggedDates[h.log_date]=true; });
+  r.daysWorked+=Object.keys(loggedDates).length;
   return r;
 }
 function fmtH(mins){ return (mins/60).toFixed(1); }
