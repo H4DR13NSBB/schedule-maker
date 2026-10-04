@@ -382,7 +382,7 @@ body.is-admin-light .emp-row.draggable{cursor:default;pointer-events:none;}
   body *{visibility:hidden;}
   #printArea, #printArea *{visibility:visible; -webkit-print-color-adjust:exact; print-color-adjust:exact; color-adjust:exact;}
   #printArea{display:block;position:absolute;left:0;top:0;width:100%;}
-  .print-page{page-break-after:always;padding:6mm;position:relative;height:280mm;box-sizing:border-box;display:flex;flex-direction:column;}
+  .print-page{page-break-after:always;padding:6mm;position:relative;height:246mm;box-sizing:border-box;display:flex;flex-direction:column;}
   .print-page .pbottom-row{display:flex;align-items:stretch;gap:6mm;}
   .print-page .pbottom-row .plegend{flex:none;}
   .print-page .plogo-box{flex:1;display:flex;align-items:flex-start;justify-content:center;min-width:0;}
@@ -5229,11 +5229,15 @@ function buildPrintPage(store, weekKey){
   });
 
   // Every store must fit on exactly one printed page (grid + hours table and logo + signature table).
-  // The page is a fixed-height column (268mm inside the padding) with the signatures pushed to its
-  // bottom. The grid rows share what's left after the fixed blocks; if that's too tight, the
-  // signature rows get shorter first (down to 10mm).
-  var USABLE_HEIGHT_MM=264, TITLE_BLOCK_MM=24, GRID_GAP_MM=6, DAY_HEADER_MM=14, LEGEND_HEADER_MM=8, LEGEND_ROW_MM=7, SIGN_GAP_MM=6, SIGN_HEADER_MM=8;
-  var MIN_ROW_MM=1.75, MAX_ROW_MM=6; // per 15-min row
+  // The page is a fixed-height column with the signatures pushed to its bottom. The grid rows share
+  // what's left after the fixed blocks; if that's too tight, the signature rows get shorter first
+  // (down to 9mm). The budget below is deliberately well short of A4's real printable height: a
+  // phone's print path (AirPrint / Android print service) routinely ignores the @page size/margin
+  // CSS below and substitutes its own paper size and margins (often Letter, often bigger margins
+  // than 8mm), so sizing to the full A4 area made the page fit perfectly on a computer and spill onto
+  // a second sheet from a phone. This smaller budget leaves enough slack to still fit after that.
+  var USABLE_HEIGHT_MM=230, TITLE_BLOCK_MM=24, GRID_GAP_MM=6, DAY_HEADER_MM=14, LEGEND_HEADER_MM=8, LEGEND_ROW_MM=7, SIGN_GAP_MM=6, SIGN_HEADER_MM=8;
+  var MIN_ROW_MM=1.5, MAX_ROW_MM=6; // per 15-min row
   var LOGO_MM=40; // fixed logo height, next to the hours table
   var legendRows=Math.max(1, employees.length);
   var legendHeightMM = LEGEND_HEADER_MM + legendRows*LEGEND_ROW_MM;
@@ -5242,7 +5246,7 @@ function buildPrintPage(store, weekKey){
   // the rest, so the signatures land at the bottom of the page.
   var bottomRowMM = Math.max(legendHeightMM, logoSrc ? LOGO_MM : 0);
   var fixedMM = TITLE_BLOCK_MM + GRID_GAP_MM + DAY_HEADER_MM + bottomRowMM + SIGN_GAP_MM + SIGN_HEADER_MM;
-  var SIGN_ROW_MM = Math.max(10, Math.min(16, (USABLE_HEIGHT_MM - fixedMM - MIN_ROW_MM*slotCount)/signRows));
+  var SIGN_ROW_MM = Math.max(9, Math.min(16, (USABLE_HEIGHT_MM - fixedMM - MIN_ROW_MM*slotCount)/signRows));
   var remainingMM = USABLE_HEIGHT_MM - fixedMM - signRows*SIGN_ROW_MM;
   var rowMM = slotCount>0 ? remainingMM/slotCount : 3;
   rowMM = Math.max(MIN_ROW_MM, Math.min(MAX_ROW_MM, rowMM));
