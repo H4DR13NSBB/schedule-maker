@@ -335,6 +335,7 @@ body:not(.is-online) .online-only{display:none;}
 body.role-manager .admin-only,body.role-employee .admin-only{display:none!important;}
 body.role-manager:not(.is-store-admin) .store-admin-ok,body.role-employee .store-admin-ok{display:none!important;}
 body:not(.has-employee-link) .mypage-only,body.role-employee .mypage-only{display:none!important;}
+body:not(.is-flex-employee) .flex-hours-only{display:none!important;}
 .leave-status{padding:2px 7px;border-radius:999px;font-size:11.5px;font-weight:600;}
 .leave-status.pending{background:color-mix(in srgb, orange 20%, transparent);color:orange;}
 .leave-status.approved{background:color-mix(in srgb, var(--ok) 20%, transparent);color:var(--ok);}
@@ -441,6 +442,7 @@ body.role-employee .day-body{cursor:default;}
     <button class="tab-btn staff-only" data-tab="setup">Configuration</button>
     <button class="tab-btn store-admin-ok" data-tab="data">Analyse</button>
     <button class="tab-btn online-only" data-tab="leave" id="tab-leave-btn">Demandes</button>
+    <button class="tab-btn flex-hours-only" data-tab="myhours">Mes heures</button>
     <button class="tab-btn staff-only" data-tab="absences">Absences</button>
   </div>
   <div class="spacer"></div>
@@ -561,6 +563,10 @@ body.role-employee .day-body{cursor:default;}
 
   <section id="view-leave" class="view">
     <div class="card" id="card-leave"></div>
+  </section>
+
+  <section id="view-myhours" class="view">
+    <div class="card" id="card-myhours"></div>
   </section>
 
   <section id="view-absences" class="view">
@@ -1505,6 +1511,16 @@ function loadLeaveRequests(){
     leaveRequests=res.data||[];
   });
 }
+// Hours a "flexible" (worksFromHome) employee logs themselves instead of being scheduled in shifts
+// -- same read scope as leave requests (own / own store's / everyone for the admin).
+var hourLogs=[];
+function loadHourLogs(){
+  if(!sb || !currentProfile) return Promise.resolve();
+  return sb.from("hour_logs").select("*").order("log_date",{ascending:false}).then(function(res){
+    if(res.error){ console.error("loadHourLogs failed", res.error); return; }
+    hourLogs=res.data||[];
+  });
+}
 // Calls the "manage-account" edge function (create/update/set-secret/delete a login) — admin only.
 function manageAccount(action, payload){
   var body=Object.assign({action:action}, payload||{});
@@ -1612,13 +1628,23 @@ function refreshServerRows(){
 }
 
 // Live changes from other people: merge the row into the state and redraw.
-var leaveRefreshTimer=null;
+var leaveRefreshTimer=null, hourLogRefreshTimer=null;
 function onRemoteChange(p){
   var table=p.table;
   if(table==="leave_requests"){
     clearTimeout(leaveRefreshTimer);
     leaveRefreshTimer=setTimeout(function(){
       loadLeaveRequests().then(function(){ if(document.getElementById("view-leave").classList.contains("active")) renderLeaveTab(); });
+    }, 400);
+    return;
+  }
+  if(table==="hour_logs"){
+    clearTimeout(hourLogRefreshTimer);
+    hourLogRefreshTimer=setTimeout(function(){
+      loadHourLogs().then(function(){
+        if(document.getElementById("view-leave").classList.contains("active")) renderLeaveTab();
+        if(document.getElementById("view-myhours") && document.getElementById("view-myhours").classList.contains("active")) renderMyHours();
+      });
     }, 400);
     return;
   }
@@ -1730,7 +1756,7 @@ function bootOnline(user){
     if(res.error) throw res.error;
     if(!res.data){ sb.auth.signOut(); showLoginScreen("Ce compte n'a pas encore de profil. Contactez l'administrateur."); return; }
     currentProfile=res.data;
-    return Promise.all([refreshServerRows(), loadAccounts(), loadLeaveRequests()]).then(function(results){
+    return Promise.all([refreshServerRows(), loadAccounts(), loadLeaveRequests(), loadHourLogs()]).then(function(results){
       var rows=results[0];
       var empty=!Object.keys(rows).some(function(k){ return rows[k].table==="stores" || rows[k].table==="employees"; });
       var local=null;
@@ -1746,6 +1772,8 @@ function bootOnline(user){
       document.body.classList.add("role-"+currentProfile.role);
       document.body.classList.toggle("is-store-admin", isStoreAdmin());
       document.body.classList.toggle("has-employee-link", !!currentProfile.employee_id);
+      var linkedEmp=currentProfile.employee_id && getEmployee(currentProfile.employee_id);
+      document.body.classList.toggle("is-flex-employee", currentProfile.role==="employee" && !!(linkedEmp && linkedEmp.worksFromHome));
       var scope=myStoreScope();
       if(scope && state.stores.length && !scope.some(function(id){ return id===state.ui.currentStoreId; }))
         state.ui.currentStoreId = scope[0] || (state.stores[0] ? state.stores[0].id : null);
@@ -2156,6 +2184,12 @@ function employeeUsedMinutes(empId, weekKey){
   var week=getWeek(weekKey);
   return week.shifts.filter(function(s){return s.employeeId===empId;})
     .reduce(function(sum,s){return sum+(toMin(s.end)-toMin(s.start));},0);
+}
+// Approved self-logged hours (a flexible employee's "Mes heures" tab) that fall within this week.
+function weekHourLogMinutes(empId, weekKey){
+  var dates=weekDates(weekKey).map(dateStr), from=dates[0], to=dates[6];
+  return hourLogs.filter(function(h){ return h.employee_id===empId && h.status==="approved" && h.log_date>=from && h.log_date<=to; })
+    .reduce(function(sum,h){ return sum+Math.round(h.hours*60); }, 0);
 }
 
 /* ---------- 4. Validation engine ---------- */
@@ -4244,6 +4278,25 @@ function renderEmployeeProfile(empId){
     html+="<p class='hint'>S'ajoute à l'année suivante (p.ex. 2026 → 2027) : les vacances restantes au droit de l'année, les heures au solde d'heures (Données). "+
       (emp.reserveOvertime ? "Heures sup. mises de côté : les heures reportées restent en réserve." : "Les heures sont aussi planifiées : réparties sur les premières semaines de l'année, 8h au plus par semaine (heures en plus → cible réduite, heures en moins → cible augmentée).")+"</p>";
 
+    if(isTrueAdmin() && emp.worksFromHome){
+      html+="<h3>Heures imputées</h3>";
+      var hlMine=hourLogs.filter(function(h){ return h.employee_id===emp.id; }).slice().sort(function(a,b){ return a.log_date<b.log_date?1:-1; });
+      if(!hlMine.length) html+="<p class='empty-note'>Aucune heure imputée.</p>";
+      else {
+        var hlCutoff=dateStr(new Date(Date.now()-14*86400000));
+        var hlRecent=hlMine.filter(function(h){ return h.log_date>=hlCutoff; }), hlOlder=hlMine.filter(function(h){ return h.log_date<hlCutoff; });
+        function hlTable(list){
+          var t="<table><thead><tr><th>Date</th><th>Heures</th><th>Note</th><th>Statut</th></tr></thead><tbody>";
+          list.forEach(function(h){
+            t+="<tr><td>"+h.log_date+"</td><td class='num'>"+h.hours+"</td><td>"+escAttr(h.note||"")+"</td>"+
+              "<td><span class='leave-status "+h.status+"'>"+LEAVE_STATUS_LABELS[h.status]+"</span>"+(h.overtime?" <span class='hint'>(heures sup.)</span>":"")+"</td></tr>";
+          });
+          return t+"</tbody></table>";
+        }
+        html += hlRecent.length ? hlTable(hlRecent) : "<p class='empty-note'>Aucune entrée récente.</p>";
+        if(hlOlder.length) html+="<details style='margin-top:10px'><summary class='setup-group-title'>Plus de 2 semaines ("+hlOlder.length+")</summary>"+hlTable(hlOlder)+"</details>";
+      }
+    }
     if(isTrueAdmin()){
       if(emp.archived) html+="<p class='hint' style='margin-top:18px'>Employé(e) archivé(e) : absent(e) des plannings et de la génération automatique, mais ses données (contrats, absences, historique) restent conservées.</p>";
       html+="<div style='margin-top:18px'>"+
@@ -5429,23 +5482,30 @@ function renderLeaveTab(){
 // tucked into a collapsed section -- still there for the record, just out of the way day to day.
 function renderLeaveTabStaff(el){
   var canDecide=currentProfile.role==="admin" || currentProfile.role==="manager";
+  // Overtime hour-log entries (a flexible employee going over their weekly target) show up here
+  // alongside leave requests -- same "needs a decision" shape, just a different source table.
+  var hourItems=hourLogs.filter(function(h){ return h.overtime; }).map(function(h){
+    return {_kind:"hours", id:h.id, employee_id:h.employee_id, type:"overtime", start_date:h.log_date, end_date:h.log_date, note:h.note, status:h.status, hours:h.hours};
+  });
+  var allItems=leaveRequests.map(function(r){ var c=clone(r); c._kind="leave"; return c; }).concat(hourItems);
   var html="<h2>Demandes de congé</h2>";
-  if(!leaveRequests.length){ html+="<p class='empty-note'>Aucune demande.</p>"; el.innerHTML=html; return; }
+  if(!allItems.length){ html+="<p class='empty-note'>Aucune demande.</p>"; el.innerHTML=html; return; }
   var today=dateStr(new Date());
-  var empOptions=Array.from(new Set(leaveRequests.map(function(r){ return r.employee_id; })))
+  var empOptions=Array.from(new Set(allItems.map(function(r){ return r.employee_id; })))
     .map(function(id){ var e=getEmployee(id); return {id:id, name:e?e.name:id}; })
     .sort(function(a,b){ return a.name.localeCompare(b.name); });
+  var typeLabels=Object.assign({overtime:"Heures supp."}, LEAVE_TYPE_LABELS);
   html+="<div class='row' style='align-items:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap'>";
   html+="<div class='field' style='flex:none;width:180px'><label>Employé</label><select id='lf-emp'><option value=''>Tous</option>"+
     empOptions.map(function(o){ return "<option value='"+o.id+"' "+(leaveFilter.employee===o.id?"selected":"")+">"+escAttr(o.name)+"</option>"; }).join("")+"</select></div>";
   html+="<div class='field' style='flex:none;width:150px'><label>Type</label><select id='lf-type'><option value=''>Tous</option>"+
-    Object.keys(LEAVE_TYPE_LABELS).map(function(t){ return "<option value='"+t+"' "+(leaveFilter.type===t?"selected":"")+">"+LEAVE_TYPE_LABELS[t]+"</option>"; }).join("")+"</select></div>";
+    Object.keys(typeLabels).map(function(t){ return "<option value='"+t+"' "+(leaveFilter.type===t?"selected":"")+">"+typeLabels[t]+"</option>"; }).join("")+"</select></div>";
   html+="<div class='field' style='flex:none;width:150px'><label>Statut</label><select id='lf-status'><option value=''>Tous</option>"+
     Object.keys(LEAVE_STATUS_LABELS).map(function(s){ return "<option value='"+s+"' "+(leaveFilter.status===s?"selected":"")+">"+LEAVE_STATUS_LABELS[s]+"</option>"; }).join("")+"</select></div>";
   if(leaveFilter.employee || leaveFilter.type || leaveFilter.status) html+="<div class='field' style='flex:none'><button class='btn btn-sm' id='lf-reset'>Réinitialiser</button></div>";
   html+="</div>";
 
-  var filtered=leaveRequests.filter(function(r){
+  var filtered=allItems.filter(function(r){
     return (!leaveFilter.employee || r.employee_id===leaveFilter.employee)
       && (!leaveFilter.type || r.type===leaveFilter.type)
       && (!leaveFilter.status || r.status===leaveFilter.status);
@@ -5461,9 +5521,10 @@ function renderLeaveTabStaff(el){
     var h="<table><thead><tr><th>Employé</th><th>Type</th><th>Du</th><th>Au</th><th># jours</th><th>Note</th><th>Statut</th>"+(canDecide?"<th></th>":"")+"</tr></thead><tbody>";
     list.forEach(function(r){
       var emp=getEmployee(r.employee_id);
-      h+="<tr data-lr='"+r.id+"'><td>"+(emp?escAttr(emp.name):r.employee_id)+"</td>"+
-        "<td>"+(LEAVE_TYPE_LABELS[r.type]||r.type)+"</td><td>"+r.start_date+"</td><td>"+r.end_date+"</td>"+
-        "<td class='num'>"+(emp?countLeaveDays(emp, r.start_date, r.end_date):"—")+"</td>"+
+      var amount = r._kind==="hours" ? r.hours+"h" : (emp?countLeaveDays(emp, r.start_date, r.end_date):"—");
+      h+="<tr data-req-kind='"+r._kind+"' data-req-id='"+r.id+"'><td>"+(emp?escAttr(emp.name):r.employee_id)+"</td>"+
+        "<td>"+(typeLabels[r.type]||r.type)+"</td><td>"+r.start_date+"</td><td>"+r.end_date+"</td>"+
+        "<td class='num'>"+amount+"</td>"+
         "<td>"+escAttr(r.note||"")+"</td><td><span class='leave-status "+r.status+"'>"+LEAVE_STATUS_LABELS[r.status]+"</span>"+
         (r.cancel_requested?" <span class='leave-status pending' title=\"L'employé(e) a demandé l'annulation de ce congé déjà approuvé\">Annulation demandée</span>":"")+"</td>";
       if(canDecide){
@@ -5493,14 +5554,14 @@ function renderLeaveTabStaff(el){
   var resetBtn=el.querySelector("#lf-reset");
   if(resetBtn) resetBtn.addEventListener("click", function(){ leaveFilter={employee:"", type:"", status:""}; renderLeaveTab(); });
   if(!canDecide) return;
-  el.querySelectorAll("tr[data-lr]").forEach(function(tr){
-    var id=tr.getAttribute("data-lr");
+  el.querySelectorAll("tr[data-req-id]").forEach(function(tr){
+    var id=tr.getAttribute("data-req-id"), kind=tr.getAttribute("data-req-kind");
     var approveBtn=tr.querySelector("[data-action=approve]");
-    if(approveBtn) approveBtn.addEventListener("click", function(){ decideLeaveRequest(id, "approved").then(renderLeaveTab).catch(function(){}); });
+    if(approveBtn) approveBtn.addEventListener("click", function(){ decideRequestItem(kind, id, "approved").then(renderLeaveTab).catch(function(){}); });
     var rejectBtn=tr.querySelector("[data-action=reject]");
-    if(rejectBtn) rejectBtn.addEventListener("click", function(){ decideLeaveRequest(id, "rejected").then(renderLeaveTab).catch(function(){}); });
+    if(rejectBtn) rejectBtn.addEventListener("click", function(){ decideRequestItem(kind, id, "rejected").then(renderLeaveTab).catch(function(){}); });
     var reopenBtn=tr.querySelector("[data-action=reopen]");
-    if(reopenBtn) reopenBtn.addEventListener("click", function(){ decideLeaveRequest(id, "pending").then(renderLeaveTab).catch(function(){}); });
+    if(reopenBtn) reopenBtn.addEventListener("click", function(){ decideRequestItem(kind, id, "pending").then(renderLeaveTab).catch(function(){}); });
     var confirmCancelBtn=tr.querySelector("[data-action=confirm-cancel]");
     if(confirmCancelBtn) confirmCancelBtn.addEventListener("click", function(){
       if(!confirm("Confirmer l'annulation de ce congé déjà approuvé ? La demande sera supprimée définitivement.")) return;
@@ -5523,6 +5584,13 @@ function decideLeaveRequest(id, status){
     if(res.error){ alert("Erreur : "+res.error.message); throw res.error; }
     return loadLeaveRequests();
   });
+}
+function decideRequestItem(kind, id, status){
+  if(kind==="hours") return sb.from("hour_logs").update({status:status}).eq("id", id).then(function(res){
+    if(res.error){ alert("Erreur : "+res.error.message); throw res.error; }
+    return loadHourLogs();
+  });
+  return decideLeaveRequest(id, status);
 }
 // An employee requests time off and sees their own history; a "congé" is a punctual day that does
 // not count against the yearly vacation entitlement (only "vacances" does — see the Données tab).
@@ -5777,11 +5845,13 @@ function switchTab(tab){
   document.getElementById("view-leave").classList.toggle("active", tab==="leave");
   document.getElementById("view-absences").classList.toggle("active", tab==="absences");
   document.getElementById("view-mypage").classList.toggle("active", tab==="mypage");
+  document.getElementById("view-myhours").classList.toggle("active", tab==="myhours");
   updatePrintButtonLabel();
   if(tab==="data") renderData();
   if(tab==="leave") renderLeaveTab();
   if(tab==="absences") renderAbsencesTab();
   if(tab==="mypage") renderMyPage();
+  if(tab==="myhours") renderMyHours();
 }
 // A manager (or admin) who is also linked to an employee record: their own read-only schedule for
 // the week, plus the same leave-request form/history an employee gets -- the staff tabs (Planning,
@@ -5817,6 +5887,82 @@ function renderMyPage(){
   leaveEl.style.marginTop="24px";
   el.appendChild(leaveEl);
   renderLeaveTabEmployee(leaveEl);
+}
+// A "flexible" (worksFromHome) employee logs their own hours instead of being scheduled in shifts.
+// Logging within the week's normal target saves immediately; going over it needs a manager/admin to
+// confirm (same shape as a leave request) -- see the "send" policy on hour_logs in schema.sql.
+function renderMyHours(){
+  var el=document.getElementById("card-myhours");
+  if(!el || !currentProfile) return;
+  var empId=currentProfile.employee_id, emp=empId && getEmployee(empId);
+  if(!emp){ el.innerHTML="<h2>Mes heures</h2><p class='empty-note'>Votre compte n'est lié à aucune fiche employé.</p>"; return; }
+  var weekKey=state.ui.currentWeekKey;
+  var scheduled=employeeUsedMinutes(empId, weekKey), logged=weekHourLogMinutes(empId, weekKey);
+  var target=employeeTargetMinutes(emp, weekKey), total=scheduled+logged, small=fteInWeek(emp, weekKey)<1;
+  var html="<h2>Mes heures</h2>";
+  html+="<div class='row' style='align-items:center;gap:10px;margin:4px 0 10px'><button class='btn btn-sm' id='mh-prev'>‹</button><strong>"+weekKey+"</strong><button class='btn btn-sm' id='mh-next'>›</button></div>";
+  html+="<p class='hint'>Semaine : "+fmtHoursDisplay(scheduled, small)+"h planifiées + "+fmtHoursDisplay(logged, small)+"h imputées = "+fmtHoursDisplay(total, small)+"h / "+fmtHoursDisplay(target, small)+"h cible"+
+    (total>target?" <b style='color:var(--danger)'>(+"+fmtHoursDisplay(total-target, small)+"h)</b>":"")+".</p>";
+
+  html+="<h3>Imputer des heures</h3>";
+  html+="<div class='row' style='max-width:640px;flex-wrap:wrap;align-items:flex-end'>";
+  html+="<div class='field' style='flex:none'><label>Date</label><input type='date' id='hl-date' value='"+dateStr(new Date())+"'></div>";
+  html+="<div class='field' style='flex:none;width:110px'><label>Heures</label><input type='number' id='hl-hours' min='0.5' max='24' step='0.25' placeholder='p.ex. 8'></div>";
+  html+="<div class='field'><label>Note (optionnel)</label><input type='text' id='hl-note' placeholder='p.ex. mission chez un client'></div>";
+  html+="<div class='field' style='flex:none'><button class='btn btn-sm' id='hl-send'>Enregistrer</button></div>";
+  html+="</div>";
+
+  html+="<h3>Historique</h3>";
+  var mine=hourLogs.filter(function(h){ return h.employee_id===empId; }).slice().sort(function(a,b){ return a.log_date<b.log_date?1:-1; });
+  var cutoff=dateStr(new Date(Date.now()-14*86400000));
+  var recent=mine.filter(function(h){ return h.log_date>=cutoff; }), older=mine.filter(function(h){ return h.log_date<cutoff; });
+  function rowsTable(list){
+    var h="<table><thead><tr><th>Date</th><th>Heures</th><th>Note</th><th>Statut</th><th></th></tr></thead><tbody>";
+    list.forEach(function(r){
+      h+="<tr data-hl='"+r.id+"'><td>"+r.log_date+"</td><td class='num'>"+r.hours+"</td><td>"+escAttr(r.note||"")+"</td>"+
+        "<td><span class='leave-status "+r.status+"'>"+LEAVE_STATUS_LABELS[r.status]+"</span>"+(r.overtime?" <span class='hint'>(heures sup.)</span>":"")+"</td>"+
+        "<td><button class='icon-btn' data-action='del-hl' title='Supprimer'>✕</button></td></tr>";
+    });
+    h+="</tbody></table>";
+    return h;
+  }
+  if(!mine.length) html+="<p class='empty-note'>Aucune heure imputée.</p>";
+  else {
+    html += recent.length ? rowsTable(recent) : "<p class='empty-note'>Aucune entrée récente.</p>";
+    if(older.length) html+="<details style='margin-top:14px'><summary class='setup-group-title'>Plus de 2 semaines ("+older.length+")</summary>"+rowsTable(older)+"</details>";
+  }
+  el.innerHTML=html;
+
+  document.getElementById("mh-prev").addEventListener("click", function(){ state.ui.currentWeekKey=shiftWeekKey(state.ui.currentWeekKey,-1); saveState(); renderMyHours(); });
+  document.getElementById("mh-next").addEventListener("click", function(){ state.ui.currentWeekKey=shiftWeekKey(state.ui.currentWeekKey,1); saveState(); renderMyHours(); });
+  document.getElementById("hl-send").addEventListener("click", function(){
+    var date=document.getElementById("hl-date").value;
+    var hours=parseFloat(document.getElementById("hl-hours").value);
+    var note=document.getElementById("hl-note").value.trim();
+    if(!date){ alert("Choisissez une date."); return; }
+    if(!hours || hours<=0){ alert("Entrez un nombre d'heures."); return; }
+    var logWeekKey=weekKeyOf(parseDateStr(date));
+    var existing=employeeUsedMinutes(empId, logWeekKey)+weekHourLogMinutes(empId, logWeekKey);
+    var weekTarget=employeeTargetMinutes(emp, logWeekKey);
+    var newTotal=existing+Math.round(hours*60);
+    var isOvertime=newTotal>weekTarget;
+    if(isOvertime && !confirm("Cela dépasse votre horaire normal de "+fmtHoursDisplay(newTotal-weekTarget, fteInWeek(emp, logWeekKey)<1)+"h pour la semaine du "+logWeekKey+". Ces heures supplémentaires devront être validées par un responsable. Confirmer ?")) return;
+    var btn=document.getElementById("hl-send"); btn.disabled=true;
+    sb.from("hour_logs").insert({employee_id:empId, log_date:date, hours:hours, note:note, overtime:isOvertime, status:isOvertime?"pending":"approved"}).then(function(res){
+      if(res.error){ alert("Erreur : "+res.error.message); btn.disabled=false; return; }
+      return loadHourLogs().then(renderMyHours);
+    });
+  });
+  el.querySelectorAll("[data-action=del-hl]").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var id=btn.closest("[data-hl]").getAttribute("data-hl");
+      if(!confirm("Supprimer cette entrée ?")) return;
+      sb.from("hour_logs").delete().eq("id", id).then(function(res){
+        if(res.error){ alert("Erreur : "+res.error.message); return; }
+        return loadHourLogs().then(renderMyHours);
+      });
+    });
+  });
 }
 
 function init(){
