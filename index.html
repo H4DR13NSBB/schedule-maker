@@ -1131,9 +1131,9 @@ function generateWeeks(weekKeys){
   return {weekKeys:weekKeys, gaps:gaps, violators:violators, notPossible:notPossible, autoCount:autoCount, shortfalls:shortfalls, frozen:frozen};
 }
 // Small multiple-choice dialog; onPick receives the chosen option's value (nothing on cancel).
-function askChoice(title, text, choices, onPick){
+function askChoice(title, text, choices, onPick, safe){
   var root=document.getElementById("modal-root");
-  var html="<div class='modal-overlay'><div class='modal' style='width:440px'><h3>"+title+"</h3><p style='margin:0 0 12px'>"+text+"</p>";
+  var html="<div class='modal-overlay'"+(safe?" data-light-safe='1'":"")+"><div class='modal' style='width:440px'><h3>"+title+"</h3><p style='margin:0 0 12px'>"+text+"</p>";
   html+="<div style='display:flex;flex-direction:column;gap:8px'>"+choices.map(function(c,i){
     return "<button class='btn"+(i===0?" btn-primary":"")+"' data-choice='"+i+"' style='text-align:left'>"+c.label+"</button>";
   }).join("")+"</div>";
@@ -6133,7 +6133,8 @@ function init(){
 var ADMIN_LIGHT_SAFE=".tab-btn,.store-tab-btn,.nav-item,.nav-toggle,#btn-prev-week,#btn-next-week,#btn-today,"+
   "#mp-prev,#mp-next,#mh-prev,#mh-next,#mh-today,#btn-data-prev,#btn-data-next,#btn-data-year,#data-month,"+
   "#lf-emp,#lf-type,#lf-status,#lf-reset,[data-action=back],[data-action=edit-emp],[data-action=profile],"+
-  "[data-action=cancel],[data-action=toggle-archived],#btn-print-all,#btn-files-menu,#btn-export,#btn-export-params,#btn-logout";
+  "[data-action=cancel],[data-action=toggle-archived],#btn-print-all,#btn-files-menu,#btn-export,#btn-export-params,#btn-logout,"+
+  ".modal-overlay[data-light-safe]";
 function adminLightBlock(){ alert("Mode consultation (admin léger) : vous voyez tout, mais vous ne pouvez rien modifier ici."); }
 function setupAdminLightGuard(){
   document.addEventListener("click", function(e){
@@ -6251,7 +6252,7 @@ function startApp(){
         }
         if(mode==="compact") doPrintCompact(myPrintStores(), title);
         else doPrint(myPrintStores(), title);
-      });
+      }, true);
   });
   document.getElementById("chk-freeze").addEventListener("change", function(e){
     var week=getWeek(state.ui.currentWeekKey);
