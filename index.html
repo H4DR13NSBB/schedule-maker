@@ -5871,7 +5871,7 @@ function renderMyPage(){
   var weekKey=state.ui.currentWeekKey;
   var used=employeeUsedMinutes(empId, weekKey), target=employeeTargetMinutes(emp, weekKey);
   var html="<h2>Mon horaire</h2>";
-  html+="<div class='row' style='align-items:center;gap:10px;margin:4px 0 10px'><button class='btn btn-sm' id='mp-prev'>‹</button><strong>"+weekKey+"</strong><button class='btn btn-sm' id='mp-next'>›</button></div>";
+  html+="<div class='row' style='align-items:center;gap:10px;margin:4px 0 10px'><button class='btn btn-sm' style='flex:none' id='mp-prev'>‹</button><strong style='flex:none'>"+weekKey+"</strong><button class='btn btn-sm' style='flex:none' id='mp-next'>›</button></div>";
   html+="<p class='hint'>"+fmtHoursDisplay(used, fteInWeek(emp, weekKey)<1)+"h travaillées / "+fmtHoursDisplay(target, fteInWeek(emp, weekKey)<1)+"h cible.</p>";
   var week=getWeek(weekKey);
   html+="<div class='row' style='flex-wrap:wrap;gap:16px;margin-top:10px'>";
@@ -5909,7 +5909,7 @@ function renderMyHours(){
   var scheduled=employeeUsedMinutes(empId, weekKey), logged=weekHourLogMinutes(empId, weekKey);
   var target=employeeTargetMinutes(emp, weekKey), total=scheduled+logged, small=fteInWeek(emp, weekKey)<1;
   var html="<h2>Mes heures</h2>";
-  html+="<div class='row' style='align-items:center;gap:10px;margin:4px 0 10px'><button class='btn btn-sm' id='mh-prev'>‹</button><strong>"+weekLabel+"</strong><button class='btn btn-sm' id='mh-next'>›</button></div>";
+  html+="<div class='row' style='align-items:center;gap:10px;margin:4px 0 10px'><button class='btn btn-sm' style='flex:none' id='mh-prev'>‹</button><strong style='flex:none'>"+weekLabel+"</strong><button class='btn btn-sm' style='flex:none' id='mh-next'>›</button></div>";
   html+="<p class='hint'>Semaine : "+fmtHoursDisplay(scheduled, small)+"h planifiées + "+fmtHoursDisplay(logged, small)+"h imputées = "+fmtHoursDisplay(total, small)+"h / "+fmtHoursDisplay(target, small)+"h cible"+
     (total>target?" <b style='color:var(--danger)'>(+"+fmtHoursDisplay(total-target, small)+"h)</b>":"")+".</p>";
 
