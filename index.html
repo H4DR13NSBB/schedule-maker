@@ -382,6 +382,16 @@ body.is-admin-light .emp-row.draggable{cursor:default;pointer-events:none;}
 }
 
 #printArea{display:none;}
+/* Shown only when printing from the installed home-screen app (see showPrintCloseOverlay()): on
+   iOS/Android, a standalone PWA has no browser chrome (no back button, no way to dismiss a print
+   preview), and window.print() there can leave #printArea's print-media styles stuck applied to the
+   live page with no way out. This button is the only way back in that case, so its own visibility
+   can't depend on @media print -- that's the exact thing that gets stuck -- it's controlled purely by
+   the "show" class instead, with !important so it survives even a stuck "body *{visibility:hidden}". */
+#print-close-overlay{display:none;position:fixed;top:14px;right:14px;z-index:999999;background:#2563eb;
+  color:#fff;border:none;border-radius:10px;padding:14px 22px;font-size:16px;font-weight:700;
+  box-shadow:0 4px 16px rgba(0,0,0,.35);visibility:visible!important;}
+#print-close-overlay.show{display:block!important;}
 @media print{
   body *{visibility:hidden;}
   #printArea, #printArea *{visibility:visible; -webkit-print-color-adjust:exact; print-color-adjust:exact; color-adjust:exact;}
@@ -596,6 +606,7 @@ body.is-admin-light .emp-row.draggable{cursor:default;pointer-events:none;}
 </main>
 
 <div id="printArea"></div>
+<button type="button" id="print-close-overlay">✕ Fermer l'aperçu</button>
 <div id="modal-root"></div>
 
 <script>
@@ -5351,12 +5362,19 @@ function buildPrintPage(store, weekKey){
   html+="</div>";
   return html;
 }
+// Installed home-screen app (iOS "Ajouter à l'écran d'accueil" / Android equivalent): no browser
+// chrome at all, so if window.print() ever leaves the print view stuck on screen there is otherwise
+// no way back -- see showPrintCloseOverlay() and #print-close-overlay above.
+function isStandaloneApp(){ return !!(window.navigator.standalone || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)); }
+function closePrintPreview(){ document.getElementById("printArea").innerHTML=""; document.getElementById("print-close-overlay").classList.remove("show"); }
+function showPrintCloseOverlay(){ if(isStandaloneApp()) document.getElementById("print-close-overlay").classList.add("show"); }
 function doPrint(stores, title){
   var area=document.getElementById("printArea");
   area.innerHTML = stores.map(function(s){ return buildPrintPage(s, state.ui.currentWeekKey); }).join("");
   var oldTitle=document.title;
   document.title=title;
-  window.addEventListener("afterprint", function restore(){ document.title=oldTitle; window.removeEventListener("afterprint", restore); });
+  window.addEventListener("afterprint", function restore(){ document.title=oldTitle; closePrintPreview(); window.removeEventListener("afterprint", restore); });
+  showPrintCloseOverlay();
   window.print();
 }
 // Compact combined printout: every store on one page, no signatures -- a quick overview rather
@@ -5435,7 +5453,8 @@ function doPrintCompact(stores, title){
   area.innerHTML = "<div class='print-page print-page-compact'>"+stores.map(function(s){ return buildPrintPageCompact(s, state.ui.currentWeekKey); }).join("")+"</div>";
   var oldTitle=document.title;
   document.title=title;
-  window.addEventListener("afterprint", function restore(){ document.title=oldTitle; window.removeEventListener("afterprint", restore); });
+  window.addEventListener("afterprint", function restore(){ document.title=oldTitle; closePrintPreview(); window.removeEventListener("afterprint", restore); });
+  showPrintCloseOverlay();
   window.print();
 }
 
@@ -6138,7 +6157,7 @@ var ADMIN_LIGHT_SAFE=".tab-btn,.store-tab-btn,.nav-item,.nav-toggle,#btn-prev-we
   "#mp-prev,#mp-next,#mh-prev,#mh-next,#mh-today,#btn-data-prev,#btn-data-next,#btn-data-year,#data-month,"+
   "#lf-emp,#lf-type,#lf-status,#lf-reset,[data-action=back],[data-action=edit-emp],[data-action=profile],"+
   "[data-action=cancel],[data-action=toggle-archived],#btn-print-all,#btn-files-menu,#btn-export,#btn-export-params,#btn-logout,"+
-  ".modal-overlay[data-light-safe]";
+  "#print-close-overlay,.modal-overlay[data-light-safe]";
 function adminLightBlock(){ alert("Mode consultation (admin léger) : vous voyez tout, mais vous ne pouvez rien modifier ici."); }
 function setupAdminLightGuard(){
   document.addEventListener("click", function(e){
@@ -6159,6 +6178,7 @@ function setupAdminLightGuard(){
 }
 function startApp(){
   setupAdminLightGuard();
+  document.getElementById("print-close-overlay").addEventListener("click", closePrintPreview);
   lastSavedJSON=JSON.stringify(state);
   document.getElementById("btn-undo").addEventListener("click", undoLastChange);
   document.getElementById("btn-redo").addEventListener("click", redoLastChange);
