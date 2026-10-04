@@ -343,6 +343,12 @@ body:not(.is-flex-employee) .flex-hours-only{display:none!important;}
 body.role-employee .staff-only{display:none!important;}
 body.role-employee .shift-block{pointer-events:none;}
 body.role-employee .day-body{cursor:default;}
+/* Admin léger: never let the planning grid itself be dragged/clicked into an edit -- everything
+   else (buttons, inputs) is intercepted in JS with a popup instead, but the grid is dense enough
+   that a popup per shift block would be unusable, so it's just inert like an employee's view. */
+body.is-admin-light .shift-block{pointer-events:none;}
+body.is-admin-light .day-body{cursor:default;}
+body.is-admin-light .emp-row.draggable{cursor:default;pointer-events:none;}
 .shift-block.not-mine{opacity:.5;}
 
 @media (prefers-reduced-motion: reduce){
@@ -408,6 +414,17 @@ body.role-employee .day-body{cursor:default;}
   .print-page .psign th{font-size:22px;}
   .print-page .psign td.psign-name{text-align:left;font-weight:700;color:#111;width:35%;padding-left:6px;font-size:22px;}
   .print-page .psign td.psign-box{width:45%;}
+  /* Compact combined printout: natural flowing height instead of forcing exactly one page per
+     store, smaller fonts/rows, no signatures -- an overview rather than the per-store document. */
+  .print-page-compact{height:auto!important;display:block!important;}
+  .print-page-compact .pstore-compact{margin-bottom:5mm;break-inside:avoid;}
+  .print-page-compact h3{margin:0 0 2mm;font-size:13px;color:#111;}
+  .print-page-compact .pcompact-closed{font-size:10px;color:#444;margin:0 0 4mm;}
+  .print-page-compact .pgrid-wrap{margin-bottom:0;}
+  .print-page-compact .pgrid-axis th,.print-page-compact .pgrid-axis td{font-size:6.5px;}
+  .print-page-compact .pgrid-day th{font-size:7.5px;line-height:1.1;padding:1px 0;}
+  .print-page-compact .pgrid-block{font-size:6.5px;}
+  .print-page-compact .pgrid-label-h{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;white-space:nowrap;overflow:hidden;color:#111;font-weight:700;}
   @page{size:A4 portrait;margin:8mm;}
 }
 </style>
@@ -1455,6 +1472,9 @@ function managerStoreIds(){ return isManager() ? (currentProfile.store_ids||[]) 
 // A manager granted "admin privilege": full admin rights, confined to their own store(s).
 function isStoreAdmin(){ return isManager() && !!currentProfile.store_admin; }
 function isTrueAdmin(){ return !!(currentProfile && currentProfile.role==="admin"); }
+// "Admin léger": sees exactly what a true admin sees, but every write is refused server-side
+// (RLS's is_write_admin()) and the page itself intercepts clicks on anything that would mutate data.
+function isAdminLight(){ return isTrueAdmin() && !!currentProfile.view_only; }
 // Has admin-level UI access (full admin, or a store-admin manager) -- still store-scoped for the latter.
 function hasAdminAccess(){ return isTrueAdmin() || isStoreAdmin(); }
 // Generate / Effacer / Actualiser horaires fixes all act on just the currently selected store tab,
@@ -1774,12 +1794,13 @@ function bootOnline(user){
       document.body.classList.toggle("has-employee-link", !!currentProfile.employee_id);
       var linkedEmp=currentProfile.employee_id && getEmployee(currentProfile.employee_id);
       document.body.classList.toggle("is-flex-employee", currentProfile.role==="employee" && !!(linkedEmp && linkedEmp.worksFromHome));
+      document.body.classList.toggle("is-admin-light", isAdminLight());
       var scope=myStoreScope();
       if(scope && state.stores.length && !scope.some(function(id){ return id===state.ui.currentStoreId; }))
         state.ui.currentStoreId = scope[0] || (state.stores[0] ? state.stores[0].id : null);
       if(state.ui.currentStoreId && !getStore(state.ui.currentStoreId)) state.ui.currentStoreId = state.stores[0] ? state.stores[0].id : null;
       document.getElementById("login-screen").hidden=true;
-      document.getElementById("account-label").textContent=currentProfile.display_name+" · "+({admin:"administrateur", manager:"gérant(e)", employee:"employé(e)"}[currentProfile.role]||currentProfile.role);
+      document.getElementById("account-label").textContent=currentProfile.display_name+" · "+({admin:"administrateur", manager:"gérant(e)", employee:"employé(e)"}[currentProfile.role]||currentProfile.role)+(isAdminLight()?" (lecture seule)":"");
       document.getElementById("tab-leave-btn").textContent = currentProfile.role==="employee" ? "Mes demandes" : "Demandes";
       startApp();
       scheduleSync(); // sends what the migration or the first import changed (admin only)
@@ -4182,6 +4203,7 @@ function renderEmployeeProfile(empId){
       var defaultRole = acct ? acct.role : (isTrueAdmin() && sugStore ? "manager" : "employee");
       var defaultStoreIds = acct ? (acct.store_ids||[]) : (sugStore ? [sugStore.id] : []);
       var defaultStoreAdmin = acct ? !!acct.store_admin : false;
+      var defaultViewOnly = acct ? !!acct.view_only : false;
       html+="<h3>Connexion &amp; rôle <span class='hint' style='font-weight:normal'>("+(isTrueAdmin()?"visible par l'administrateur uniquement":"compte employé(e) pour votre magasin")+")</span></h3>";
       html+="<div class='row' style='max-width:560px;flex-wrap:wrap;align-items:flex-end'>";
       html+="<div class='field' style='flex:none;width:170px'><label>Rôle</label><select id='ep-role'"+(isTrueAdmin()?"":" disabled")+">"+
@@ -4200,6 +4222,8 @@ function renderEmployeeProfile(empId){
         "<label style='display:flex;align-items:center;gap:6px;margin-top:8px;font-size:13px;font-weight:normal'><input type='checkbox' id='ep-store-admin' "+(defaultStoreAdmin?"checked":"")+"> "+
         "<span><span style='font-weight:600'>Privilège administrateur</span> — <span class='hint' style='display:inline'>accès complet (configuration, génération, Analyse) mais uniquement sur le(s) magasin(s) ci-dessus ; jamais les comptes ni les autres magasins</span></span></label>"+
         "</div>";
+      html+="<div class='field' id='ep-view-only-box' style='display:"+(defaultRole==="admin"?"block":"none")+"'><label style='display:flex;align-items:center;gap:6px;font-size:13px;font-weight:normal'><input type='checkbox' id='ep-view-only' "+(defaultViewOnly?"checked":"")+"> "+
+        "<span><span style='font-weight:600'>Admin léger</span> — <span class='hint' style='display:inline'>voit tout comme un administrateur, mais ne peut rien modifier (lecture seule ; peut quand même imprimer)</span></span></label></div>";
       if(acct) html += isTrueAdmin() ?
         "<div class='field' style='max-width:300px;margin-top:-4px'><label>Nom de connexion</label><div class='row' style='gap:6px'><input type='text' id='ep-login' value='"+escAttr(acct.login_name)+"' style='flex:1'><button class='btn btn-sm' data-action='acct-rename'>Renommer</button></div></div>"
         : "<p class='hint' style='margin-top:-4px'>Connexion : "+escAttr(acct.login_name)+"</p>";
@@ -4319,21 +4343,26 @@ function renderEmployeeProfile(empId){
     if(canManageAcct){
       var roleSel=document.getElementById("ep-role");
       var storesBox=document.getElementById("ep-role-stores");
-      if(storesBox) roleSel.addEventListener("change", function(){ storesBox.style.display = roleSel.value==="manager" ? "block" : "none"; });
+      var viewOnlyBox=document.getElementById("ep-view-only-box");
+      roleSel.addEventListener("change", function(){
+        if(storesBox) storesBox.style.display = roleSel.value==="manager" ? "block" : "none";
+        if(viewOnlyBox) viewOnlyBox.style.display = roleSel.value==="admin" ? "block" : "none";
+      });
       function pickedStoreIds(){ return Array.prototype.slice.call(el.querySelectorAll("#ep-role-stores [data-store]:checked")).map(function(cb){ return cb.getAttribute("data-store"); }); }
       function pickedStoreAdmin(){ var cb=document.getElementById("ep-store-admin"); return !!(cb && cb.checked); }
+      function pickedViewOnly(){ var cb=document.getElementById("ep-view-only"); return !!(cb && cb.checked); }
       var btnCreate=el.querySelector("[data-action=acct-create]");
       if(btnCreate) btnCreate.addEventListener("click", function(){
         var secret=document.getElementById("ep-secret").value.trim();
         btnCreate.disabled=true;
-        manageAccount("create", {loginName:emp.name, displayName:emp.name, role:roleSel.value, secret:secret, employeeId:emp.id, storeIds:pickedStoreIds(), storeAdmin:pickedStoreAdmin()})
+        manageAccount("create", {loginName:emp.name, displayName:emp.name, role:roleSel.value, secret:secret, employeeId:emp.id, storeIds:pickedStoreIds(), storeAdmin:pickedStoreAdmin(), viewOnly:pickedViewOnly()})
           .then(function(){ return loadAccounts(); }).then(render)
           .catch(function(e){ alert("Erreur : "+e.message); btnCreate.disabled=false; });
       });
       var btnUpdate=el.querySelector("[data-action=acct-update]");
       if(btnUpdate) btnUpdate.addEventListener("click", function(){
         btnUpdate.disabled=true;
-        manageAccount("update", {userId:acct.user_id, role:roleSel.value, storeIds:pickedStoreIds(), displayName:emp.name, storeAdmin:pickedStoreAdmin()})
+        manageAccount("update", {userId:acct.user_id, role:roleSel.value, storeIds:pickedStoreIds(), displayName:emp.name, storeAdmin:pickedStoreAdmin(), viewOnly:pickedViewOnly()})
           .then(function(){ return loadAccounts(); }).then(render)
           .catch(function(e){ alert("Erreur : "+e.message); btnUpdate.disabled=false; });
       });
@@ -5322,6 +5351,86 @@ function doPrint(stores, title){
   window.addEventListener("afterprint", function restore(){ document.title=oldTitle; window.removeEventListener("afterprint", restore); });
   window.print();
 }
+// Compact combined printout: every store on one page, no signatures -- a quick overview rather
+// than the per-store document above. Half-hour rows, initials instead of full names, no logo: the
+// goal is fitting as much as will reasonably fit, not an exact one-page guarantee -- a lot of open
+// stores/hours can still spill onto a second sheet, same as any print layout would.
+function buildPrintPageCompact(store, weekKey){
+  var dates=weekDates(weekKey);
+  var week=getWeek(weekKey);
+  var dayHoursList=dates.map(function(d){ return resolveStoreHours(store, dateStr(d)); });
+  var axisStart=Infinity, axisEnd=-Infinity;
+  dayHoursList.forEach(function(h){ if(h){ axisStart=Math.min(axisStart,workStartMin(h)); axisEnd=Math.max(axisEnd,workEndMin(h)); } });
+  var hasHours = axisStart!==Infinity;
+  if(hasHours){ axisStart=Math.floor(axisStart/30)*30; axisEnd=Math.ceil(axisEnd/30)*30; }
+  var SLOT=30;
+  var slotCount = hasHours ? (axisEnd-axisStart)/SLOT : 0;
+  var ROW_MM=2.3;
+  var html="<div class='pstore-compact'>";
+  html+="<h3>"+escAttr(store.name)+"</h3>";
+  if(!hasHours){ html+="<p class='pcompact-closed'>Fermé toute la semaine.</p></div>"; return html; }
+  html+="<div class='pgrid-wrap'>";
+  html+="<table class='pgrid-axis'><thead><tr><th></th></tr></thead><tbody>";
+  for(var mi=0; mi<slotCount; mi++){
+    var slotStart0=axisStart+mi*SLOT;
+    html+="<tr style='height:"+ROW_MM+"mm'><td>"+fromMin(slotStart0)+"</td></tr>";
+  }
+  html+="</tbody></table>";
+  dates.forEach(function(d, dayIdx){
+    var ds=dateStr(d);
+    var dayShifts=week.shifts.filter(function(s){ return s.storeId===store.id && s.date===ds; });
+    var packed=packLanes(dayShifts);
+    var laneCount=Math.max(2, packed.laneCount);
+    var grid=[];
+    for(var l=0;l<laneCount;l++){ grid.push(new Array(slotCount).fill(null)); }
+    packed.placed.forEach(function(p){
+      var s2=p.shift;
+      var startIdx=Math.max(0, Math.round((toMin(s2.start)-axisStart)/SLOT));
+      var endIdx=Math.min(slotCount, Math.round((toMin(s2.end)-axisStart)/SLOT));
+      for(var i=startIdx;i<endIdx;i++){ grid[p.lane][i]=s2; }
+    });
+    var hours=dayHoursList[dayIdx];
+    var holiday=isHoliday(ds, store.id);
+    var hoursLabel=hours?(hours.open+"–"+hours.close):"Fermé";
+    html+="<table class='pgrid-day pgrid-day-compact'><thead><tr><th colspan='"+laneCount+"'>"+DOW_SHORT[dayIdx]+" "+pad2(d.getDate())+"."+pad2(d.getMonth()+1)+"<br>"+(holiday?"Férié":hoursLabel)+"</th></tr></thead><tbody>";
+    var bufferStart = hours ? workStartMin(hours) : null;
+    var bufferEnd = hours ? workEndMin(hours) : null;
+    var lunchClosure=storeLunchClosure(store, ds);
+    var lunchStart=lunchClosure?toMin(lunchClosure.start):null, lunchEnd=lunchClosure?toMin(lunchClosure.end):null;
+    for(var row=0; row<slotCount; row++){
+      html+="<tr style='height:"+ROW_MM+"mm'>";
+      for(var lane=0; lane<laneCount; lane++){
+        var shift=grid[lane][row];
+        if(shift){
+          if(row>0 && grid[lane][row-1]===shift) continue;
+          var span=1;
+          while(row+span<slotCount && grid[lane][row+span]===shift) span++;
+          var emp=getEmployee(shift.employeeId);
+          var label=emp?(emp.initials||emp.name):"?";
+          html+="<td class='pgrid-block' rowspan='"+span+"' style='background:"+(emp?emp.color:"#ccc")+"'><div class='pgrid-label-h'>"+escAttr(label)+"</div></td>";
+        } else {
+          var slotStart=axisStart+row*SLOT;
+          var inLunch = lunchClosure && slotStart>=lunchStart && slotStart<lunchEnd;
+          var closed = !hours || slotStart<bufferStart || slotStart>=bufferEnd || inLunch;
+          html+="<td class='"+(closed?"slot-closed":"slot-open")+"'></td>";
+        }
+      }
+      html+="</tr>";
+    }
+    html+="</tbody></table>";
+  });
+  html+="</div></div>";
+  return html;
+}
+function doPrintCompact(stores, title){
+  var area=document.getElementById("printArea");
+  area.innerHTML = "<div class='print-page print-page-compact'>"+stores.map(function(s){ return buildPrintPageCompact(s, state.ui.currentWeekKey); }).join("")+"</div>";
+  var oldTitle=document.title;
+  document.title=title;
+  window.addEventListener("afterprint", function restore(){ document.title=oldTitle; window.removeEventListener("afterprint", restore); });
+  window.print();
+}
+
 
 /* ---------- 9b. Données: per-employee summary ---------- */
 // Computed from the app's data (the same content as the JSON saves). Only planned weeks count, so
@@ -6012,7 +6121,35 @@ function init(){
   startApp();
 }
 // Wires the page up and draws it; `state` is already loaded (from the browser or the database).
+// Admin léger ("view only"): intercept any click/focus on something that would mutate data and
+// show a popup instead of letting it through -- the database refuses the write either way
+// (is_write_admin() in schema.sql), this is just about a clean read-only feel instead of a
+// confusing failed-save error after the fact. Everything not explicitly allowlisted here as pure
+// navigation is treated as a mutation and blocked.
+var ADMIN_LIGHT_SAFE=".tab-btn,.store-tab-btn,.nav-item,.nav-toggle,#btn-prev-week,#btn-next-week,#btn-today,"+
+  "#mp-prev,#mp-next,#mh-prev,#mh-next,#mh-today,#btn-data-prev,#btn-data-next,#btn-data-year,#data-month,"+
+  "#lf-emp,#lf-type,#lf-status,#lf-reset,[data-action=back],[data-action=edit-emp],[data-action=profile],"+
+  "[data-action=cancel],[data-action=toggle-archived],#btn-print-all,#btn-files-menu,#btn-export,#btn-export-params,#btn-logout";
+function adminLightBlock(){ alert("Mode consultation (admin léger) : vous voyez tout, mais vous ne pouvez rien modifier ici."); }
+function setupAdminLightGuard(){
+  document.addEventListener("click", function(e){
+    if(!isAdminLight()) return;
+    var t=e.target.closest("button,[data-action],input[type=checkbox],input[type=radio],input[type=color]");
+    if(!t || t.closest(ADMIN_LIGHT_SAFE)) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    adminLightBlock();
+  }, true);
+  document.addEventListener("focusin", function(e){
+    if(!isAdminLight()) return;
+    var t=e.target, tag=t.tagName, type=(t.type||"").toLowerCase();
+    var editable = tag==="SELECT" || tag==="TEXTAREA" || (tag==="INPUT" && ["checkbox","radio","color","button","submit"].indexOf(type)<0);
+    if(!editable || t.closest(ADMIN_LIGHT_SAFE)) return;
+    t.blur();
+    adminLightBlock();
+  }, true);
+}
 function startApp(){
+  setupAdminLightGuard();
   lastSavedJSON=JSON.stringify(state);
   document.getElementById("btn-undo").addEventListener("click", undoLastChange);
   document.getElementById("btn-redo").addEventListener("click", redoLastChange);
@@ -6094,16 +6231,23 @@ function startApp(){
     renderSchedule();
   });
   document.getElementById("btn-print-all").addEventListener("click", function(){
-    var title="Plannings — "+weekDisplay(state.ui.currentWeekKey);
-    var isAdmin=!currentProfile || currentProfile.role==="admin"; // offline: single user, treated as admin
-    if(isAdmin){
-      getWeek(state.ui.currentWeekKey).printedAt=new Date().toISOString();
-      getWeek(state.ui.currentWeekKey).frozen=true; // a printed / sent week is locked until unticked
-      renderSchedule();
-      saveState();
-      saveJSONFile(stampedFileName("save"), true);
-    }
-    doPrint(myPrintStores(), title);
+    askChoice("Imprimer",
+      "Choisissez la mise en page.",
+      [{label:"Un magasin par page, avec case de signature", value:"full"},
+       {label:"Tous les magasins sur une page, sans signatures", value:"compact"}],
+      function(mode){
+        var title="Plannings — "+weekDisplay(state.ui.currentWeekKey);
+        var isAdmin=!currentProfile || currentProfile.role==="admin"; // offline: single user, treated as admin
+        if(isAdmin && !isAdminLight()){
+          getWeek(state.ui.currentWeekKey).printedAt=new Date().toISOString();
+          getWeek(state.ui.currentWeekKey).frozen=true; // a printed / sent week is locked until unticked
+          renderSchedule();
+          saveState();
+          saveJSONFile(stampedFileName("save"), true);
+        }
+        if(mode==="compact") doPrintCompact(myPrintStores(), title);
+        else doPrint(myPrintStores(), title);
+      });
   });
   document.getElementById("chk-freeze").addEventListener("change", function(e){
     var week=getWeek(state.ui.currentWeekKey);
