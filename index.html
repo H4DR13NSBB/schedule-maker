@@ -5909,7 +5909,7 @@ function renderMyHours(){
   var scheduled=employeeUsedMinutes(empId, weekKey), logged=weekHourLogMinutes(empId, weekKey);
   var target=employeeTargetMinutes(emp, weekKey), total=scheduled+logged, small=fteInWeek(emp, weekKey)<1;
   var html="<h2>Mes heures</h2>";
-  html+="<div class='row' style='align-items:center;gap:10px;margin:4px 0 10px'><button class='btn btn-sm' style='flex:none' id='mh-prev'>‹</button><strong style='flex:none'>"+weekLabel+"</strong><button class='btn btn-sm' style='flex:none' id='mh-next'>›</button></div>";
+  html+="<div class='row' style='align-items:center;gap:10px;margin:4px 0 10px'><button class='btn btn-sm' style='flex:none' id='mh-prev'>‹</button><strong style='flex:none'>"+weekLabel+"</strong><button class='btn btn-sm' style='flex:none' id='mh-next'>›</button><button class='btn btn-sm' style='flex:none' id='mh-today'>Aujourd'hui</button></div>";
   html+="<p class='hint'>Semaine : "+fmtHoursDisplay(scheduled, small)+"h planifiées + "+fmtHoursDisplay(logged, small)+"h imputées = "+fmtHoursDisplay(total, small)+"h / "+fmtHoursDisplay(target, small)+"h cible"+
     (total>target?" <b style='color:var(--danger)'>(+"+fmtHoursDisplay(total-target, small)+"h)</b>":"")+".</p>";
 
@@ -5951,6 +5951,7 @@ function renderMyHours(){
 
   document.getElementById("mh-prev").addEventListener("click", function(){ state.ui.currentWeekKey=shiftWeekKey(state.ui.currentWeekKey,-1); saveState(); renderMyHours(); });
   document.getElementById("mh-next").addEventListener("click", function(){ state.ui.currentWeekKey=shiftWeekKey(state.ui.currentWeekKey,1); saveState(); renderMyHours(); });
+  document.getElementById("mh-today").addEventListener("click", function(){ state.ui.currentWeekKey=weekKeyOf(new Date()); saveState(); renderMyHours(); });
   // Employees have no update permission on hour_logs (only insert/delete of their own -- see
   // schema.sql), so changing a day's value here deletes its old entry (if any) and inserts a fresh
   // one. Days are processed in order, each checked against a running weekly total, so a later day's
