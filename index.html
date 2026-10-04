@@ -5904,20 +5904,29 @@ function renderMyHours(){
   var empId=currentProfile.employee_id, emp=empId && getEmployee(empId);
   if(!emp){ el.innerHTML="<h2>Mes heures</h2><p class='empty-note'>Votre compte n'est lié à aucune fiche employé.</p>"; return; }
   var weekKey=state.ui.currentWeekKey;
+  var dates=weekDates(weekKey);
+  var weekLabel=weekDisplay(weekKey)+" — "+pad2(dates[0].getDate())+"."+pad2(dates[0].getMonth()+1)+" au "+pad2(dates[6].getDate())+"."+pad2(dates[6].getMonth()+1)+"."+dates[6].getFullYear();
   var scheduled=employeeUsedMinutes(empId, weekKey), logged=weekHourLogMinutes(empId, weekKey);
   var target=employeeTargetMinutes(emp, weekKey), total=scheduled+logged, small=fteInWeek(emp, weekKey)<1;
   var html="<h2>Mes heures</h2>";
-  html+="<div class='row' style='align-items:center;gap:10px;margin:4px 0 10px'><button class='btn btn-sm' id='mh-prev'>‹</button><strong>"+weekKey+"</strong><button class='btn btn-sm' id='mh-next'>›</button></div>";
+  html+="<div class='row' style='align-items:center;gap:10px;margin:4px 0 10px'><button class='btn btn-sm' id='mh-prev'>‹</button><strong>"+weekLabel+"</strong><button class='btn btn-sm' id='mh-next'>›</button></div>";
   html+="<p class='hint'>Semaine : "+fmtHoursDisplay(scheduled, small)+"h planifiées + "+fmtHoursDisplay(logged, small)+"h imputées = "+fmtHoursDisplay(total, small)+"h / "+fmtHoursDisplay(target, small)+"h cible"+
     (total>target?" <b style='color:var(--danger)'>(+"+fmtHoursDisplay(total-target, small)+"h)</b>":"")+".</p>";
 
   html+="<h3>Imputer des heures</h3>";
-  html+="<div class='row' style='max-width:640px;flex-wrap:wrap;align-items:flex-end'>";
-  html+="<div class='field' style='flex:none'><label>Date</label><input type='date' id='hl-date' value='"+dateStr(new Date())+"'></div>";
-  html+="<div class='field' style='flex:none;width:110px'><label>Heures</label><input type='number' id='hl-hours' min='0.5' max='24' step='0.25' placeholder='p.ex. 8'></div>";
-  html+="<div class='field'><label>Note (optionnel)</label><input type='text' id='hl-note' placeholder='p.ex. mission chez un client'></div>";
-  html+="<div class='field' style='flex:none'><button class='btn btn-sm' id='hl-send'>Enregistrer</button></div>";
-  html+="</div>";
+  html+="<table><thead><tr><th>Jour</th><th>Heures</th><th>Note</th><th>Statut</th></tr></thead><tbody>";
+  dates.forEach(function(d,i){
+    var ds=dateStr(d);
+    var entry=hourLogs.filter(function(h){ return h.employee_id===empId && h.log_date===ds; })[0];
+    html+="<tr data-date='"+ds+"'>";
+    html+="<td style='white-space:nowrap;font-weight:600'>"+DOW_LABELS[i]+" "+pad2(d.getDate())+"."+pad2(d.getMonth()+1)+"</td>";
+    html+="<td><input type='number' class='hl-hours' min='0' max='24' step='0.25' style='width:80px' value='"+(entry?Number(entry.hours):"")+"'></td>";
+    html+="<td><input type='text' class='hl-note' style='width:100%;min-width:160px' value='"+(entry?escAttr(entry.note||""):"")+"'></td>";
+    html+="<td>"+(entry?"<span class='leave-status "+entry.status+"'>"+LEAVE_STATUS_LABELS[entry.status]+"</span>"+(entry.overtime?" <span class='hint'>(heures sup.)</span>":""):"")+"</td>";
+    html+="</tr>";
+  });
+  html+="</tbody></table>";
+  html+="<button class='btn btn-sm' id='hl-send' style='margin-top:10px'>Enregistrer la semaine</button>";
 
   html+="<h3>Historique</h3>";
   var mine=hourLogs.filter(function(h){ return h.employee_id===empId; }).slice().sort(function(a,b){ return a.log_date<b.log_date?1:-1; });
@@ -5942,23 +5951,44 @@ function renderMyHours(){
 
   document.getElementById("mh-prev").addEventListener("click", function(){ state.ui.currentWeekKey=shiftWeekKey(state.ui.currentWeekKey,-1); saveState(); renderMyHours(); });
   document.getElementById("mh-next").addEventListener("click", function(){ state.ui.currentWeekKey=shiftWeekKey(state.ui.currentWeekKey,1); saveState(); renderMyHours(); });
+  // Employees have no update permission on hour_logs (only insert/delete of their own -- see
+  // schema.sql), so changing a day's value here deletes its old entry (if any) and inserts a fresh
+  // one. Days are processed in order, each checked against a running weekly total, so a later day's
+  // overtime warning reflects every earlier day's value already saved this round.
   document.getElementById("hl-send").addEventListener("click", function(){
-    var date=document.getElementById("hl-date").value;
-    var hours=parseFloat(document.getElementById("hl-hours").value);
-    var note=document.getElementById("hl-note").value.trim();
-    if(!date){ alert("Choisissez une date."); return; }
-    if(!hours || hours<=0){ alert("Entrez un nombre d'heures."); return; }
-    var logWeekKey=weekKeyOf(parseDateStr(date));
-    var existing=employeeUsedMinutes(empId, logWeekKey)+weekHourLogMinutes(empId, logWeekKey);
-    var weekTarget=employeeTargetMinutes(emp, logWeekKey);
-    var newTotal=existing+Math.round(hours*60);
-    var isOvertime=newTotal>weekTarget;
-    if(isOvertime && !confirm("Cela dépasse votre horaire normal de "+fmtHoursDisplay(newTotal-weekTarget, fteInWeek(emp, logWeekKey)<1)+"h pour la semaine du "+logWeekKey+". Ces heures supplémentaires devront être validées par un responsable. Confirmer ?")) return;
-    var btn=document.getElementById("hl-send"); btn.disabled=true;
-    sb.from("hour_logs").insert({employee_id:empId, log_date:date, hours:hours, note:note, overtime:isOvertime, status:isOvertime?"pending":"approved"}).then(function(res){
-      if(res.error){ alert("Erreur : "+res.error.message); btn.disabled=false; return; }
-      return loadHourLogs().then(renderMyHours);
+    var weekTarget=employeeTargetMinutes(emp, weekKey);
+    var rows=Array.prototype.slice.call(el.querySelectorAll("tr[data-date]")).map(function(tr){
+      var ds=tr.getAttribute("data-date");
+      var entry=hourLogs.filter(function(h){ return h.employee_id===empId && h.log_date===ds; })[0];
+      var hoursStr=tr.querySelector(".hl-hours").value.trim();
+      var newHours=hoursStr===""?null:parseFloat(hoursStr);
+      var newNote=tr.querySelector(".hl-note").value.trim();
+      var oldHours=entry?Number(entry.hours):null, oldNote=entry?(entry.note||""):"";
+      var changed = entry ? (newHours!==oldHours || newNote!==oldNote) : (newHours!=null);
+      return {ds:ds, entry:entry, newHours:newHours, newNote:newNote, changed:changed};
     });
+    var baseMinutes=scheduled;
+    rows.forEach(function(r){ if(!r.changed && r.entry && r.entry.status==="approved") baseMinutes+=Math.round(Number(r.entry.hours)*60); });
+    var btn=document.getElementById("hl-send"); btn.disabled=true;
+    var chain=Promise.resolve();
+    rows.filter(function(r){ return r.changed; }).forEach(function(r){
+      chain=chain.then(function(){
+        var delPart = r.entry ? sb.from("hour_logs").delete().eq("id", r.entry.id) : Promise.resolve({error:null});
+        if(r.newHours==null) return delPart.then(function(res){ if(res.error) throw res.error; }); // cleared: delete only
+        var prospective=baseMinutes+Math.round(r.newHours*60);
+        var isOvertime=prospective>weekTarget;
+        if(isOvertime && !confirm(DOW_LABELS[dowFromDate(parseDateStr(r.ds))]+" "+r.ds+" : cela dépasse votre horaire normal de "+fmtHoursDisplay(prospective-weekTarget, small)+"h cette semaine. Ces heures supplémentaires devront être validées par un responsable. Confirmer ?")) return;
+        return delPart.then(function(res){
+          if(res.error) throw res.error;
+          return sb.from("hour_logs").insert({employee_id:empId, log_date:r.ds, hours:r.newHours, note:r.newNote, overtime:isOvertime, status:isOvertime?"pending":"approved"});
+        }).then(function(res){
+          if(res.error) throw res.error;
+          baseMinutes=prospective;
+        });
+      });
+    });
+    chain.then(function(){ return loadHourLogs().then(renderMyHours); })
+      .catch(function(err){ alert("Erreur : "+(err&&err.message||err)); btn.disabled=false; });
   });
   el.querySelectorAll("[data-action=del-hl]").forEach(function(btn){
     btn.addEventListener("click", function(){
