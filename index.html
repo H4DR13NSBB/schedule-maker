@@ -479,6 +479,7 @@ body.is-admin-light .emp-row.draggable{cursor:default;pointer-events:none;}
     <button class="tab-btn online-only" data-tab="leave" id="tab-leave-btn"><span id="tab-leave-label">Demandes</span><span class="tab-dot" id="tab-leave-dot" style="display:none"></span></button>
     <button class="tab-btn flex-hours-only" data-tab="myhours">Mes heures</button>
     <button class="tab-btn staff-only" data-tab="absences">Absences</button>
+    <button class="tab-btn staff-only online-only" data-tab="documents">Documents</button>
   </div>
   <div class="spacer"></div>
   <div class="header-actions">
@@ -610,6 +611,10 @@ body.is-admin-light .emp-row.draggable{cursor:default;pointer-events:none;}
 
   <section id="view-absences" class="view">
     <div class="card" id="card-absences"></div>
+  </section>
+
+  <section id="view-documents" class="view">
+    <div class="card" id="card-documents"></div>
   </section>
 </main>
 
@@ -1587,6 +1592,17 @@ function updateLeaveTabDot(){
   );
   dot.style.display = needsAttention ? "inline-block" : "none";
 }
+// Scanned/signed weekly schedules a manager (or admin) uploads at the end of the week, stored per
+// store in the "documents" bucket -- the index row's RLS already scopes what comes back (a manager
+// sees only their own store(s)', the admin sees every store's).
+var documents=[];
+function loadDocuments(){
+  if(!sb || !currentProfile) return Promise.resolve();
+  return sb.from("documents").select("*").order("uploaded_at",{ascending:false}).then(function(res){
+    if(res.error){ console.error("loadDocuments failed", res.error); return; }
+    documents=res.data||[];
+  });
+}
 // Calls the "manage-account" edge function (create/update/set-secret/delete a login) — admin only.
 function manageAccount(action, payload){
   var body=Object.assign({action:action}, payload||{});
@@ -1712,6 +1728,10 @@ function onRemoteChange(p){
         if(document.getElementById("view-myhours") && document.getElementById("view-myhours").classList.contains("active")) renderMyHours();
       });
     }, 400);
+    return;
+  }
+  if(table==="documents"){
+    loadDocuments().then(function(){ if(document.getElementById("view-documents").classList.contains("active")) renderDocuments(); });
     return;
   }
   if(!TABLE_COLUMNS[table]) return;
@@ -5326,7 +5346,7 @@ function buildPrintPage(store, weekKey){
 
   var html="<div class='print-page'>";
   html+="<h2>"+escAttr(store.name)+"</h2>";
-  html+="<div class='sub'>Semaine "+weekKey+" — "+fmtHuman(dates[0])+" au "+fmtHuman(dates[6])+" — généré le "+fmtHuman(new Date())+"</div>";
+  html+="<div class='sub'>Semaine "+weekDisplay(weekKey)+" — "+fmtHuman(dates[0])+" au "+fmtHuman(dates[6])+" — généré le "+fmtHuman(new Date())+"</div>";
 
   if(!hasHours){
     html+="<p>Ce magasin est fermé toute la semaine.</p>";
@@ -6109,6 +6129,99 @@ function renderMyInfo(){
   phoneInput.addEventListener("change", function(){ saveField("phone", phoneInput); });
   emailInput.addEventListener("change", function(){ saveField("email", emailInput); });
 }
+// Documents: the scanned/signed weekly schedule a manager (or admin) deposits for their store at
+// the end of the week. A plain manager may upload/delete for their own store(s) -- no "admin
+// privilege" needed, unlike most of the rest of Configuration; the admin sees and can download
+// every store's. The admin-light click guard already blocks an admin-light account from actually
+// using the upload/delete controls, same as everywhere else, so no special-casing is needed here.
+function renderDocuments(){
+  var el=document.getElementById("card-documents");
+  if(!el || !currentProfile) return;
+  var isAdmin=currentProfile.role==="admin";
+  var mgrStores=managerStoreIds();
+  var myStores = isAdmin ? state.stores.slice() : state.stores.filter(function(s){ return (mgrStores||[]).indexOf(s.id)>=0; });
+
+  var html="<h2>Documents</h2>";
+  html+="<p class='hint'>Déposez ici le planning scanné et signé en fin de semaine ; il est classé automatiquement par magasin.</p>";
+
+  if(myStores.length){
+    html+="<div class='row' style='flex-wrap:wrap;align-items:flex-end;gap:10px;margin-bottom:18px'>";
+    if(myStores.length>1) html+="<div class='field' style='flex:none;width:180px'><label>Magasin</label><select id='doc-store'>"+
+      myStores.map(function(s){ return "<option value='"+s.id+"'>"+escAttr(s.name)+"</option>"; }).join("")+"</select></div>";
+    html+="<div class='field' style='flex:none;width:120px'><label>Semaine</label><input type='text' id='doc-week' placeholder='p.ex. S40'></div>";
+    html+="<div class='field'><label>Fichier (PDF, PNG ou JPEG — PDF de préférence)</label><input type='file' id='doc-file' accept='.pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg'></div>";
+    html+="<div class='field' style='flex:none'><button class='btn btn-sm' id='doc-send'>Envoyer</button></div>";
+    html+="</div>";
+  }
+
+  if(!myStores.length) html+="<p class='empty-note'>Aucun magasin.</p>";
+  else myStores.forEach(function(s){
+    var list=documents.filter(function(d){ return d.store_id===s.id; });
+    html+="<h3>"+escAttr(s.name)+"</h3>";
+    if(!list.length) html+="<p class='empty-note'>Aucun document.</p>";
+    else {
+      html+="<table><thead><tr><th>Semaine</th><th>Fichier</th><th>Déposé le</th><th></th></tr></thead><tbody>";
+      list.forEach(function(d){
+        html+="<tr data-doc='"+d.id+"'><td>"+escAttr(d.week_label)+"</td><td>"+escAttr(d.file_name)+"</td><td>"+fmtHuman(new Date(d.uploaded_at))+"</td>"+
+          "<td class='row-actions'><button class='btn btn-sm' data-action='doc-download'>Télécharger</button> "+
+          "<button class='icon-btn' data-action='doc-delete' title='Supprimer'>✕</button></td></tr>";
+      });
+      html+="</tbody></table>";
+    }
+  });
+
+  el.innerHTML=html;
+  var sendBtn=document.getElementById("doc-send");
+  if(sendBtn) sendBtn.addEventListener("click", function(){
+    var storeSel=document.getElementById("doc-store");
+    var storeId = storeSel ? storeSel.value : myStores[0].id;
+    var week=document.getElementById("doc-week").value.trim();
+    var file=document.getElementById("doc-file").files[0];
+    if(!week){ alert("Indiquez la semaine (p.ex. S40)."); return; }
+    if(!file){ alert("Choisissez un fichier."); return; }
+    if(["application/pdf","image/png","image/jpeg"].indexOf(file.type)<0){ alert("Seuls les fichiers PDF, PNG ou JPEG sont acceptés."); return; }
+    sendBtn.disabled=true;
+    uploadDocument(storeId, week, file).then(function(){
+      return loadDocuments().then(renderDocuments);
+    }).catch(function(err){ alert("Erreur : "+(err&&err.message||err)); sendBtn.disabled=false; });
+  });
+  el.querySelectorAll("[data-action=doc-download]").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var doc=documents.find(function(d){ return d.id===btn.closest("[data-doc]").getAttribute("data-doc"); });
+      if(!doc) return;
+      sb.storage.from("documents").createSignedUrl(doc.file_path, 3600).then(function(res){
+        if(res.error){ alert("Erreur : "+res.error.message); return; }
+        window.open(res.data.signedUrl, "_blank");
+      });
+    });
+  });
+  el.querySelectorAll("[data-action=doc-delete]").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var id=btn.closest("[data-doc]").getAttribute("data-doc");
+      var doc=documents.find(function(d){ return d.id===id; });
+      if(!doc) return;
+      if(!confirm("Supprimer ce document ?")) return;
+      sb.storage.from("documents").remove([doc.file_path]).then(function(){
+        return sb.from("documents").delete().eq("id", id);
+      }).then(function(res){
+        if(res && res.error){ alert("Erreur : "+res.error.message); return; }
+        return loadDocuments().then(renderDocuments);
+      });
+    });
+  });
+}
+function uploadDocument(storeId, weekLabel, file){
+  var ext="", dot=file.name.lastIndexOf(".");
+  if(dot>=0) ext=file.name.slice(dot);
+  var safeWeek=weekLabel.replace(/[^A-Za-z0-9_-]/g,"") || "semaine";
+  var path=storeId+"/"+safeWeek+"-"+Date.now()+ext;
+  return sb.storage.from("documents").upload(path, file, {contentType:file.type}).then(function(res){
+    if(res.error) throw res.error;
+    return sb.from("documents").insert({store_id:storeId, week_label:weekLabel, file_path:path, file_name:file.name});
+  }).then(function(res){
+    if(res && res.error) throw res.error;
+  });
+}
 function renderAll(){ renderSetup(); renderSchedule(); renderData(); if(currentProfile && currentProfile.employee_id && currentProfile.role!=="employee") renderMyPage(); }
 
 function switchTab(tab){
@@ -6121,6 +6234,7 @@ function switchTab(tab){
   document.getElementById("view-mypage").classList.toggle("active", tab==="mypage");
   document.getElementById("view-myinfo").classList.toggle("active", tab==="myinfo");
   document.getElementById("view-myhours").classList.toggle("active", tab==="myhours");
+  document.getElementById("view-documents").classList.toggle("active", tab==="documents");
   updatePrintButtonLabel();
   if(tab==="data") renderData();
   if(tab==="leave") renderLeaveTab();
@@ -6128,6 +6242,7 @@ function switchTab(tab){
   if(tab==="mypage") renderMyPage();
   if(tab==="myinfo") renderMyInfo();
   if(tab==="myhours") renderMyHours();
+  if(tab==="documents") loadDocuments().then(renderDocuments);
 }
 // A manager (or admin) who is also linked to an employee record: their own read-only schedule for
 // the week, plus the same leave-request form/history an employee gets -- the staff tabs (Planning,
@@ -6290,7 +6405,7 @@ var ADMIN_LIGHT_SAFE=".tab-btn,.store-tab-btn,.nav-item,.nav-toggle,#btn-prev-we
   "#mp-prev,#mp-next,#mh-prev,#mh-next,#mh-today,#btn-data-prev,#btn-data-next,#btn-data-year,#data-month,"+
   "#lf-emp,#lf-type,#lf-status,#lf-reset,[data-action=back],[data-action=edit-emp],[data-action=profile],"+
   "[data-action=cancel],[data-action=toggle-archived],#btn-print-all,#btn-files-menu,#btn-export,#btn-export-params,#btn-logout,"+
-  "#print-close-overlay,.modal-overlay[data-light-safe]";
+  "#print-close-overlay,.modal-overlay[data-light-safe],[data-action=doc-download]";
 function adminLightBlock(){ alert("Mode consultation (admin léger) : vous voyez tout, mais vous ne pouvez rien modifier ici."); }
 function setupAdminLightGuard(){
   document.addEventListener("click", function(e){
