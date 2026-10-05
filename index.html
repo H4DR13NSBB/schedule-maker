@@ -340,6 +340,9 @@ details>summary:hover{color:var(--text) !important;}
 body:not(.is-online) .online-only{display:none;}
 body.role-manager .admin-only,body.role-employee .admin-only{display:none!important;}
 body.role-manager:not(.is-store-admin) .store-admin-ok,body.role-employee .store-admin-ok{display:none!important;}
+/* A plain manager's leave/overtime decisions already show under Absences -- Demandes there is
+   redundant; a store admin (and the admin) keeps the dedicated tab. */
+body.role-manager:not(.is-store-admin) #tab-leave-btn{display:none!important;}
 body:not(.has-employee-link) .mypage-only,body.role-employee .mypage-only{display:none!important;}
 body:not(.has-employee-link) .myinfo-only{display:none!important;}
 body:not(.is-flex-employee) .flex-hours-only{display:none!important;}
