@@ -3785,7 +3785,8 @@ var showArchivedEmployees=false;
 function renderEmployeesCardReadOnly(el, mgrStores){
   var emps=state.employees.filter(function(e){ return !e.archived && mgrStores.some(function(sid){ return storeAccessState(e, sid)!=="no"; }); })
     .slice().sort(function(a,b){ return (a.name||"").localeCompare(b.name||""); });
-  var html="<h2>Équipe</h2><table><thead><tr><th>Nom</th><th>Initiales</th><th>Taux (FTE)</th><th>Contrat</th><th>Jours off récurrents</th></tr></thead><tbody>";
+  var vacY=new Date().getFullYear();
+  var html="<h2>Équipe</h2><table><thead><tr><th>Nom</th><th>Initiales</th><th>Taux (FTE)</th><th>Contrat</th><th>Jours off récurrents</th><th class='num' title=\"Jours restants / droit de l'année (vacances à 100 % × taux, au prorata des jours sous contrat)\">Solde vacances "+vacY+"</th></tr></thead><tbody>";
   emps.forEach(function(emp){
     var curContract=contractOn(emp, dateStr(new Date()));
     html+="<tr>";
@@ -3797,6 +3798,14 @@ function renderEmployeesCardReadOnly(el, mgrStores){
     html+="<td>"+(daysOff.length ? daysOff.map(function(x){
       return "<span class='dow-chip "+x.state+"' title='"+escAttr(dayOffTitle(x.state))+"'>"+x.d+"</span>";
     }).join(" ") : "<span style='color:var(--muted)'>—</span>")+"</td>";
+    var carried=yearCarryVacationDays(emp, vacY);
+    if(emp.vacationDaysPerYear==null && !carried) html+="<td class='num'>—</td>";
+    else {
+      var r=employeePeriodSummary(emp, vacY+"-01-01", vacY+"-12-31");
+      var daysInYear=Math.round((new Date(vacY+1,0,1)-new Date(vacY,0,1))/86400000);
+      var entitled=emp.vacationDaysPerYear!=null ? Math.round(emp.vacationDaysPerYear*r.fteDays/daysInYear*2)/2 : 0;
+      html+="<td class='num'>"+(entitled+carried-r.vacation)+" / "+(entitled+carried)+" j</td>";
+    }
     html+="</tr>";
   });
   html+="</tbody></table>";
@@ -6019,26 +6028,6 @@ function renderAbsencesTab(){
     "<button class='btn' id='abs-today'>Aujourd'hui</button></div>";
   html+="<p class='hint'>Cliquez un jour pour le détail"+(isAdmin?" et approuver/refuser les demandes en attente":"")+". Couleur pleine = absence confirmée ; contour en pointillé = demande en attente.</p>";
   html+="<div class='abs-cal-row'>"+buildAbsenceMonthHtml(y,m)+buildAbsenceMonthHtml(y2,m2)+"</div>";
-
-  // Vacation balances: state.employees is already scoped to the viewer's own team by RLS (a
-  // manager only ever gets their own store's employees), so no extra filtering is needed here.
-  if(isAdmin){
-    var vy=new Date().getFullYear();
-    var withVac=state.employees.filter(function(e){ return e.vacationDaysPerYear!=null || yearCarryVacationDays(e, vy); });
-    if(withVac.length){
-      html+="<h3 style='margin-top:18px'>Soldes vacances "+vy+"</h3>";
-      html+="<table><thead><tr><th>Employé</th><th class='num' title=\"Jours restants / droit de l'année (vacances à 100 % × taux, au prorata des jours sous contrat)\">Solde / droit</th></tr></thead><tbody>";
-      withVac.forEach(function(e){
-        var r=employeePeriodSummary(e, vy+"-01-01", vy+"-12-31");
-        var carried=yearCarryVacationDays(e, vy);
-        var daysInYear=Math.round((new Date(vy+1,0,1)-new Date(vy,0,1))/86400000);
-        var entitled=e.vacationDaysPerYear!=null ? Math.round(e.vacationDaysPerYear*r.fteDays/daysInYear*2)/2 : 0;
-        html+="<tr><td><span class='emp-swatch' style='display:inline-block;margin-right:6px;background:"+e.color+"'></span>"+escAttr(e.name)+"</td>"+
-          "<td class='num'>"+(entitled+carried-r.vacation)+" / "+(entitled+carried)+" j</td></tr>";
-      });
-      html+="</tbody></table>";
-    }
-  }
 
   var pendingAll=leaveRequests.filter(function(lr){ return lr.status==="pending"; }).slice().sort(function(a,b){ return a.start_date<b.start_date?-1:1; });
   html+="<h3 style='margin-top:18px'>Demandes en attente ("+pendingAll.length+")</h3>";
