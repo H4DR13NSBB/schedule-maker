@@ -6002,6 +6002,26 @@ function renderAbsencesTab(){
   html+="<p class='hint'>Cliquez un jour pour le détail"+(isAdmin?" et approuver/refuser les demandes en attente":"")+". Couleur pleine = absence confirmée ; contour en pointillé = demande en attente.</p>";
   html+="<div class='abs-cal-row'>"+buildAbsenceMonthHtml(y,m)+buildAbsenceMonthHtml(y2,m2)+"</div>";
 
+  // Vacation balances: state.employees is already scoped to the viewer's own team by RLS (a
+  // manager only ever gets their own store's employees), so no extra filtering is needed here.
+  if(isAdmin){
+    var vy=new Date().getFullYear();
+    var withVac=state.employees.filter(function(e){ return e.vacationDaysPerYear!=null || yearCarryVacationDays(e, vy); });
+    if(withVac.length){
+      html+="<h3 style='margin-top:18px'>Soldes vacances "+vy+"</h3>";
+      html+="<table><thead><tr><th>Employé</th><th class='num' title=\"Jours restants / droit de l'année (vacances à 100 % × taux, au prorata des jours sous contrat)\">Solde / droit</th></tr></thead><tbody>";
+      withVac.forEach(function(e){
+        var r=employeePeriodSummary(e, vy+"-01-01", vy+"-12-31");
+        var carried=yearCarryVacationDays(e, vy);
+        var daysInYear=Math.round((new Date(vy+1,0,1)-new Date(vy,0,1))/86400000);
+        var entitled=e.vacationDaysPerYear!=null ? Math.round(e.vacationDaysPerYear*r.fteDays/daysInYear*2)/2 : 0;
+        html+="<tr><td><span class='emp-swatch' style='display:inline-block;margin-right:6px;background:"+e.color+"'></span>"+escAttr(e.name)+"</td>"+
+          "<td class='num'>"+(entitled+carried-r.vacation)+" / "+(entitled+carried)+" j</td></tr>";
+      });
+      html+="</tbody></table>";
+    }
+  }
+
   var pendingAll=leaveRequests.filter(function(lr){ return lr.status==="pending"; }).slice().sort(function(a,b){ return a.start_date<b.start_date?-1:1; });
   html+="<h3 style='margin-top:18px'>Demandes en attente ("+pendingAll.length+")</h3>";
   if(!pendingAll.length) html+="<p class='empty-note'>Aucune.</p>";
@@ -6014,6 +6034,42 @@ function renderAbsencesTab(){
     });
     html+="</tbody></table>";
   }
+
+  // Accepted requests: a manager sees every approved request of their own team (not just the ones
+  // an employee flagged for cancellation) and can cancel any of them outright -- see the loosened
+  // "withdraw" RLS policy on leave_requests in schema.sql.
+  var acceptedAll=leaveRequests.filter(function(lr){ return lr.status==="approved"; }).slice().sort(function(a,b){ return a.start_date<b.start_date?-1:1; });
+  if(isAdmin){
+    html+="<h3 style='margin-top:18px'>Demandes acceptées ("+acceptedAll.length+")</h3>";
+    if(!acceptedAll.length) html+="<p class='empty-note'>Aucune.</p>";
+    else {
+      html+="<table><thead><tr><th>Employé</th><th>Type</th><th>Du</th><th>Au</th><th>Note</th><th></th></tr></thead><tbody>";
+      acceptedAll.forEach(function(lr){
+        var emp=getEmployee(lr.employee_id);
+        html+="<tr data-lr='"+lr.id+"'><td>"+(emp?escAttr(emp.name):lr.employee_id)+"</td><td>"+(LEAVE_TYPE_LABELS[lr.type]||lr.type)+"</td><td>"+lr.start_date+"</td><td>"+lr.end_date+"</td><td>"+escAttr(lr.note||"")+"</td>"+
+          "<td class='row-actions'><button class='btn btn-sm btn-danger' data-action='cancel-approved'>Annuler</button></td></tr>";
+      });
+      html+="</tbody></table>";
+    }
+  }
+
+  // Add a leave directly (vacances/congé/maladie/indisponible) for one of the manager's own
+  // employees -- same mechanism as the equivalent form in Configuration (pushes straight into
+  // emp.absences; no request/approval step needed since a manager is the one approving anyway).
+  if(isAdmin && state.employees.length){
+    var todayAdd=dateStr(new Date());
+    html+="<h3 style='margin-top:18px'>Ajouter une absence</h3>";
+    html+="<div class='row' style='flex-wrap:wrap;align-items:flex-end;gap:10px;max-width:680px'>";
+    html+="<div class='field' style='flex:none;width:170px'><label>Employé</label><select id='abs-add-emp'>"+
+      state.employees.slice().sort(function(a,b){ return (a.name||"").localeCompare(b.name||""); }).map(function(e){ return "<option value='"+e.id+"'>"+escAttr(e.name)+"</option>"; }).join("")+"</select></div>";
+    html+="<div class='field' style='flex:none;width:140px'><label>Type</label><select id='abs-add-type'>"+
+      "<option value='vacation'>Vacances</option><option value='dayoff'>Congé</option><option value='sick'>Maladie</option><option value='unavailable'>Indisponible</option></select></div>";
+    html+="<div class='field' style='flex:none'><label>Du</label><input type='date' id='abs-add-start' value='"+todayAdd+"'></div>";
+    html+="<div class='field' style='flex:none'><label>Au</label><input type='date' id='abs-add-end' value='"+todayAdd+"'></div>";
+    html+="<div class='field' style='flex:none'><button class='btn btn-sm' id='abs-add-send'>+ Ajouter</button></div>";
+    html+="</div>";
+  }
+
   el.innerHTML=html;
 
   document.getElementById("abs-prev").addEventListener("click", function(){ shiftAbsencesMonth(-1); });
@@ -6026,6 +6082,25 @@ function renderAbsencesTab(){
     var id=tr.getAttribute("data-lr");
     var a=tr.querySelector("[data-action=approve]"); if(a) a.addEventListener("click", function(){ decideLeaveRequest(id,"approved").then(renderAbsencesTab).catch(function(){}); });
     var r=tr.querySelector("[data-action=reject]"); if(r) r.addEventListener("click", function(){ decideLeaveRequest(id,"rejected").then(renderAbsencesTab).catch(function(){}); });
+    var c=tr.querySelector("[data-action=cancel-approved]"); if(c) c.addEventListener("click", function(){
+      if(!confirm("Annuler ce congé déjà approuvé ?")) return;
+      sb.from("leave_requests").delete().eq("id", id).then(function(res){
+        if(res.error){ alert("Erreur : "+res.error.message); return; }
+        return loadLeaveRequests().then(renderAbsencesTab);
+      });
+    });
+  });
+  var addBtn=document.getElementById("abs-add-send");
+  if(addBtn) addBtn.addEventListener("click", function(){
+    var emp=getEmployee(document.getElementById("abs-add-emp").value);
+    var type=document.getElementById("abs-add-type").value;
+    var start=document.getElementById("abs-add-start").value, end=document.getElementById("abs-add-end").value;
+    if(!emp) return;
+    if(!start || !end){ alert("Choisissez une date de début et de fin."); return; }
+    if(end<start){ alert("La date de fin doit être après la date de début."); return; }
+    emp.absences=emp.absences||[];
+    emp.absences.push({id:uid(), type:type, startDate:start, endDate:end, note:""});
+    invalidateFixedSync(); saveState(); renderAbsencesTab(); renderSchedule();
   });
 }
 function openAbsenceDayModal(ds){
