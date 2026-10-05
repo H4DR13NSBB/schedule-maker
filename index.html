@@ -339,11 +339,13 @@ body:not(.is-online) .online-only{display:none;}
 body.role-manager .admin-only,body.role-employee .admin-only{display:none!important;}
 body.role-manager:not(.is-store-admin) .store-admin-ok,body.role-employee .store-admin-ok{display:none!important;}
 body:not(.has-employee-link) .mypage-only,body.role-employee .mypage-only{display:none!important;}
+body:not(.has-employee-link) .myinfo-only{display:none!important;}
 body:not(.is-flex-employee) .flex-hours-only{display:none!important;}
 .leave-status{padding:2px 7px;border-radius:999px;font-size:11.5px;font-weight:600;}
 .leave-status.pending{background:color-mix(in srgb, orange 20%, transparent);color:orange;}
 .leave-status.approved{background:color-mix(in srgb, var(--ok) 20%, transparent);color:var(--ok);}
 .leave-status.rejected{background:color-mix(in srgb, var(--danger) 20%, transparent);color:var(--danger);}
+.leave-status.cancelled{background:color-mix(in srgb, var(--muted) 20%, transparent);color:var(--muted);}
 body.role-employee .staff-only{display:none!important;}
 body.role-employee .shift-block{pointer-events:none;}
 body.role-employee .day-body{cursor:default;}
@@ -470,6 +472,7 @@ body.is-admin-light .emp-row.draggable{cursor:default;pointer-events:none;}
   <div class="tabs">
     <button class="tab-btn" data-tab="schedule">Planning</button>
     <button class="tab-btn mypage-only" data-tab="mypage" id="tab-mypage-btn">Ma page</button>
+    <button class="tab-btn myinfo-only" data-tab="myinfo" id="tab-myinfo-btn">Mes infos</button>
     <button class="tab-btn staff-only" data-tab="setup">Configuration</button>
     <button class="tab-btn store-admin-ok" data-tab="data">Analyse</button>
     <button class="tab-btn online-only" data-tab="leave" id="tab-leave-btn">Demandes</button>
@@ -590,6 +593,10 @@ body.is-admin-light .emp-row.draggable{cursor:default;pointer-events:none;}
 
   <section id="view-mypage" class="view">
     <div class="card" id="card-mypage"></div>
+  </section>
+
+  <section id="view-myinfo" class="view">
+    <div class="card" id="card-myinfo"></div>
   </section>
 
   <section id="view-leave" class="view">
@@ -829,6 +836,8 @@ function migrateState(raw){
       if(c.maxWorkDays===undefined) c.maxWorkDays = emp.maxWorkDaysOverride!=null ? emp.maxWorkDaysOverride : null;
     });
     if(emp.vacationDaysPerYear===undefined) emp.vacationDaysPerYear=null;
+    if(emp.phone==null) emp.phone="";
+    if(emp.email==null) emp.email="";
     if(!Array.isArray(emp.yearCarryOvers)) emp.yearCarryOvers=[];
     syncCurrentContract(emp);
     if(emp.minGuaranteedMinutes==null) emp.minGuaranteedMinutes=0;
@@ -1544,6 +1553,7 @@ function loadLeaveRequests(){
   return sb.from("leave_requests").select("*").order("start_date",{ascending:false}).then(function(res){
     if(res.error){ console.error("loadLeaveRequests failed", res.error); return; }
     leaveRequests=res.data||[];
+    purgeOldCancelledRequests();
   });
 }
 // Hours a "flexible" (worksFromHome) employee logs themselves instead of being scheduled in shifts
@@ -5612,7 +5622,7 @@ function renderData(){
 
 /* ---------- Leave requests (vacances / congé) ---------- */
 var LEAVE_TYPE_LABELS={vacation:"Vacances", dayoff:"Congé", unavailable:"Indisponibilité", sick:"Maladie"};
-var LEAVE_STATUS_LABELS={pending:"En attente", approved:"Approuvée", rejected:"Refusée"};
+var LEAVE_STATUS_LABELS={pending:"En attente", approved:"Approuvée", rejected:"Refusée", cancelled:"Annulée"};
 var leaveFilter={employee:"", type:"", status:""}; // staff "Demandes" tab only -- not persisted
 function renderLeaveTab(){
   var el=document.getElementById("card-leave");
@@ -5625,6 +5635,7 @@ function renderLeaveTab(){
 // tucked into a collapsed section -- still there for the record, just out of the way day to day.
 function renderLeaveTabStaff(el){
   var canDecide=currentProfile.role==="admin" || currentProfile.role==="manager";
+  var canDelete=currentProfile.role==="admin"; // delete outright -- stronger than approve/refuse, admin only
   // Overtime hour-log entries (a flexible employee going over their weekly target) show up here
   // alongside leave requests -- same "needs a decision" shape, just a different source table.
   var hourItems=hourLogs.filter(function(h){ return h.overtime; }).map(function(h){
@@ -5658,8 +5669,10 @@ function renderLeaveTabStaff(el){
     if(rank[a.status]!==rank[b.status]) return rank[a.status]-rank[b.status];
     return a.start_date<b.start_date?1:-1;
   }
-  var upcoming=filtered.filter(function(r){ return r.end_date>=today; }).sort(sortRank);
-  var past=filtered.filter(function(r){ return r.end_date<today; }).sort(sortRank);
+  var cancelled=filtered.filter(function(r){ return r.status==="cancelled"; });
+  var live=filtered.filter(function(r){ return r.status!=="cancelled"; });
+  var upcoming=live.filter(function(r){ return r.end_date>=today; }).sort(sortRank);
+  var past=live.filter(function(r){ return r.end_date<today; }).sort(sortRank);
   function rowsTable(list){
     var h="<table><thead><tr><th>Employé</th><th>Type</th><th>Du</th><th>Au</th><th># jours</th><th>Note</th><th>Statut</th>"+(canDecide?"<th></th>":"")+"</tr></thead><tbody>";
     list.forEach(function(r){
@@ -5671,11 +5684,12 @@ function renderLeaveTabStaff(el){
         "<td>"+escAttr(r.note||"")+"</td><td><span class='leave-status "+r.status+"'>"+LEAVE_STATUS_LABELS[r.status]+"</span>"+
         (r.cancel_requested?" <span class='leave-status pending' title=\"L'employé(e) a demandé l'annulation de ce congé déjà approuvé\">Annulation demandée</span>":"")+"</td>";
       if(canDecide){
-        var actions = r.cancel_requested ?
-          "<button class='btn btn-sm btn-danger' data-action='confirm-cancel'>Confirmer l'annulation</button> <button class='btn btn-sm' data-action='keep'>Garder</button>" :
-          r.status==="pending" ?
-          "<button class='btn btn-sm' data-action='approve'>Approuver</button> <button class='btn btn-sm btn-danger' data-action='reject'>Refuser</button>" :
-          "<button class='btn btn-sm' data-action='reopen'>Remettre en attente</button>";
+        var actions="";
+        if(r.status==="cancelled") actions="";
+        else if(r.cancel_requested) actions="<button class='btn btn-sm btn-danger' data-action='confirm-cancel'>Confirmer l'annulation</button> <button class='btn btn-sm' data-action='keep'>Garder</button>";
+        else if(r.status==="pending") actions="<button class='btn btn-sm' data-action='approve'>Approuver</button> <button class='btn btn-sm btn-danger' data-action='reject'>Refuser</button>";
+        else actions="<button class='btn btn-sm' data-action='reopen'>Remettre en attente</button>";
+        if(canDelete && r._kind==="leave" && r.status!=="cancelled" && !r.cancel_requested) actions+=" <button class='btn btn-sm btn-danger' data-action='delete-request'>Supprimer</button>";
         h+="<td class='row-actions'>"+actions+"</td>";
       }
       h+="</tr>";
@@ -5686,7 +5700,10 @@ function renderLeaveTabStaff(el){
   if(!filtered.length) html+="<p class='empty-note'>Aucune demande ne correspond aux filtres.</p>";
   else {
     html+=upcoming.length ? rowsTable(upcoming) : "<p class='empty-note'>Aucune demande à venir.</p>";
-    if(past.length) html+="<details style='margin-top:14px'><summary class='setup-group-title'>Demandes passées ("+past.length+")</summary>"+rowsTable(past)+"</details>";
+    if(past.length) html+="<details style='margin-top:14px'><summary class='setup-group-title'>Demandes passées ("+past.length+")</summary>"+rowsTable(past)+
+      (cancelled.length?"<details style='margin-top:10px'><summary class='setup-group-title'>Demandes annulées ("+cancelled.length+")</summary>"+rowsTable(cancelled)+"</details>":"")+"</details>";
+    else if(cancelled.length) html+="<details style='margin-top:14px'><summary class='setup-group-title'>Demandes passées (0)</summary>"+
+      "<details style='margin-top:10px' open><summary class='setup-group-title'>Demandes annulées ("+cancelled.length+")</summary>"+rowsTable(cancelled)+"</details></details>";
   }
   el.innerHTML=html;
   function filterSelect(id, key){
@@ -5720,6 +5737,24 @@ function renderLeaveTabStaff(el){
         return loadLeaveRequests().then(renderLeaveTab);
       });
     });
+    var deleteBtn=tr.querySelector("[data-action=delete-request]");
+    if(deleteBtn) deleteBtn.addEventListener("click", function(){
+      if(!confirm("Supprimer cette demande ? Elle passera dans « Demandes annulées » (sous Demandes passées) puis disparaîtra définitivement après 1 mois.")) return;
+      decideLeaveRequest(id, "cancelled").then(renderLeaveTab).catch(function(){});
+    });
+  });
+}
+// A cancelled (deleted-by-admin) request sits in "Demandes annulées" for the record, then is
+// actually removed for good once it's more than a month old -- called whenever the admin loads the
+// list, so it quietly tidies up without needing a server-side job.
+function purgeOldCancelledRequests(){
+  if(!sb || !currentProfile || currentProfile.role!=="admin" || isAdminLight()) return;
+  var cutoff=dateStr(new Date(Date.now()-30*86400000));
+  var stale=leaveRequests.filter(function(r){ return r.status==="cancelled" && (r.decided_at||"").slice(0,10)<=cutoff; });
+  if(!stale.length) return;
+  sb.from("leave_requests").delete().in("id", stale.map(function(r){ return r.id; })).then(function(res){
+    if(res.error) return;
+    leaveRequests=leaveRequests.filter(function(r){ return stale.indexOf(r)<0; });
   });
 }
 function decideLeaveRequest(id, status){
@@ -5988,12 +6023,14 @@ function switchTab(tab){
   document.getElementById("view-leave").classList.toggle("active", tab==="leave");
   document.getElementById("view-absences").classList.toggle("active", tab==="absences");
   document.getElementById("view-mypage").classList.toggle("active", tab==="mypage");
+  document.getElementById("view-myinfo").classList.toggle("active", tab==="myinfo");
   document.getElementById("view-myhours").classList.toggle("active", tab==="myhours");
   updatePrintButtonLabel();
   if(tab==="data") renderData();
   if(tab==="leave") renderLeaveTab();
   if(tab==="absences") renderAbsencesTab();
   if(tab==="mypage") renderMyPage();
+  if(tab==="myinfo") renderMyInfo();
   if(tab==="myhours") renderMyHours();
 }
 // A manager (or admin) who is also linked to an employee record: their own read-only schedule for
