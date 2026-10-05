@@ -5785,8 +5785,10 @@ function renderLeaveTabEmployee(el){
   html+="<p class='hint'>Une demande de <b>congé</b> est une absence ponctuelle et ne compte pas sur vos jours de vacances ; une demande de <b>vacances</b> est déduite de votre solde annuel.</p>";
   html+="<div class='row' style='max-width:640px;flex-wrap:wrap;align-items:flex-end'>";
   html+="<div class='field' style='flex:none;width:140px'><label>Type</label><select id='lr-type'><option value='vacation'>Vacances</option><option value='dayoff'>Congé</option></select></div>";
+  html+="<div class='row' style='flex:none;gap:10px'>";
   html+="<div class='field' style='flex:none'><label>Du</label><input type='date' id='lr-start' value='"+today+"'></div>";
   html+="<div class='field' style='flex:none'><label>Au</label><input type='date' id='lr-end' value='"+today+"'></div>";
+  html+="</div>";
   html+="<div class='field'><label>Note (optionnel)</label><input type='text' id='lr-note' placeholder='p.ex. rendez-vous médical'></div>";
   html+="<div class='field' style='flex:none'><button class='btn btn-sm' id='lr-send'>Envoyer la demande</button></div>";
   html+="</div>";
