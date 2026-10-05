@@ -4339,18 +4339,18 @@ function renderEmployeeProfile(empId){
       else {
         var hlCutoff=dateStr(new Date(Date.now()-14*86400000));
         var hlRecent=hlMine.filter(function(h){ return h.log_date>=hlCutoff; }), hlOlder=hlMine.filter(function(h){ return h.log_date<hlCutoff; });
-        // A plain (non-overtime) entry arrives already "approved" -- that's just the default state so
-        // self-serve logging doesn't block on anyone, not an actual verification step, so showing it
-        // as a status would be misleading. An overtime entry is a real pending/approved/refusée
-        // decision (see the Demandes tab) and keeps its status here. Instead, the admin can flag any
-        // entry that needs more detail from the employee -- it shows up for them in "Mes heures".
+        // No status column: a plain (non-overtime) entry arrives already "approved" -- that's just
+        // the default state so self-serve logging doesn't block on anyone, never an actual
+        // verification step, so showing it as a status would be misleading. An overtime entry's real
+        // pending/approved/refusée decision is made from the Demandes tab, not here. Instead, the
+        // admin can flag any entry that needs more detail from the employee (shows up for them in
+        // "Mes heures") and delete one outright.
         function hlTable(list){
-          var t="<table><thead><tr><th>Date</th><th>Heures</th><th>Note</th><th>Statut</th><th></th></tr></thead><tbody>";
+          var t="<table><thead><tr><th>Date</th><th>Heures</th><th>Note</th><th></th></tr></thead><tbody>";
           list.forEach(function(h){
-            var statusCell = h.overtime ? "<span class='leave-status "+h.status+"'>"+LEAVE_STATUS_LABELS[h.status]+"</span> <span class='hint'>(heures sup.)</span>" :
-              (h.flagged ? "<span class='leave-status pending' title=\"L'employé(e) la voit et peut ajouter des précisions\">Signalée</span>" : "");
-            t+="<tr><td>"+h.log_date+"</td><td class='num'>"+h.hours+"</td><td>"+escAttr(h.note||"")+"</td><td>"+statusCell+"</td>"+
-              "<td><button class='icon-btn' data-action='toggle-hl-flag' data-hl='"+h.id+"' title='"+(h.flagged?"Retirer le signalement":"Signaler : plus de détails nécessaires")+"'>"+(h.flagged?"🚩":"⚑")+"</button></td></tr>";
+            t+="<tr><td>"+h.log_date+"</td><td class='num'>"+h.hours+"</td><td>"+escAttr(h.note||"")+(h.overtime?" <span class='hint'>(heures sup.)</span>":"")+"</td>"+
+              "<td class='row-actions'><button class='icon-btn' data-action='toggle-hl-flag' data-hl='"+h.id+"' title='"+(h.flagged?"Retirer le signalement":"Signaler : plus de détails nécessaires")+"'>"+(h.flagged?"🚩":"⚑")+"</button>"+
+              " <button class='icon-btn' data-action='del-hl' data-hl='"+h.id+"' title='Supprimer cette entrée'>✕</button></td></tr>";
           });
           return t+"</tbody></table>";
         }
@@ -4488,6 +4488,15 @@ function renderEmployeeProfile(empId){
         var id=btn.getAttribute("data-hl"), entry=hourLogs.find(function(h){ return h.id===id; });
         if(!entry) return;
         sb.from("hour_logs").update({flagged:!entry.flagged}).eq("id", id).then(function(res){
+          if(res.error){ alert("Erreur : "+res.error.message); return; }
+          return loadHourLogs().then(render);
+        });
+      });
+    });
+    el.querySelectorAll("[data-action=del-hl]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        if(!confirm("Supprimer cette entrée d'heures imputées ?")) return;
+        sb.from("hour_logs").delete().eq("id", btn.getAttribute("data-hl")).then(function(res){
           if(res.error){ alert("Erreur : "+res.error.message); return; }
           return loadHourLogs().then(render);
         });
