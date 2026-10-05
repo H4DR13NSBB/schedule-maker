@@ -6509,10 +6509,13 @@ function startApp(){
   });
   document.getElementById("btn-print-all").addEventListener("click", function(){
     var title="Plannings — "+weekDisplay(state.ui.currentWeekKey);
-    // An employee only ever prints their own store(s), for their own reference -- there's no reason
-    // to ask staff/manager/signature questions that don't apply to them, so skip the layout choice
-    // and go straight to the no-signature version.
+    // An employee only ever prints their own store(s), for their own reference, so always gets the
+    // no-signature version directly. A manager always gets the one-magasin-per-page, with-signature
+    // version directly too -- simpler for a less computer-proficient person than being asked to
+    // choose a layout they may not understand the difference between. Only the admin, who may need
+    // either version depending who it's for, is actually asked.
     if(currentProfile && currentProfile.role==="employee"){ doPrintCompact(myPrintStores(), title); return; }
+    if(currentProfile && currentProfile.role==="manager"){ doPrint(myPrintStores(), title); return; }
     askChoice("Imprimer",
       "Choisissez la mise en page.",
       [{label:"Un magasin par page, avec case de signature", value:"full"},
