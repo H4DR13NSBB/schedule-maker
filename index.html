@@ -1159,7 +1159,7 @@ function generateWeeks(weekKeys){
   weekKeys.forEach(function(wk){
     state.employees.forEach(function(emp){
       var missing=salariedShortfall(emp, wk);
-      if(missing>MAX_SALARIED_SHORTFALL) shortfalls.push(emp.name+" "+wk+" (−"+(Math.round(missing/6)/10)+"h)");
+      if(missing>MAX_SALARIED_SHORTFALL) shortfalls.push(emp.name+" "+weekDisplay(wk)+" (−"+(Math.round(missing/6)/10)+"h)");
     });
   });
   return {weekKeys:weekKeys, gaps:gaps, violators:violators, notPossible:notPossible, autoCount:autoCount, shortfalls:shortfalls, frozen:frozen};
@@ -1206,10 +1206,10 @@ function runGeneration(baseWeeks, scopeLabel, askLater, skipWarning){
     undoStack.length=undoDepth; undoStack.push(before);
     window.__lastGaps=r.gaps;
     renderSchedule();
-    if(!r.weekKeys.length){ alert(r.frozen.length ? "Rien à générer : semaine(s) figée(s) ("+r.frozen.join(", ")+")." : "Rien à générer."); return; }
-    var msg=(r.weekKeys.length===1 ? "Semaine "+r.weekKeys[0] : r.weekKeys.length+" semaines ("+r.weekKeys[0]+" à "+r.weekKeys[r.weekKeys.length-1]+")")+
+    if(!r.weekKeys.length){ alert(r.frozen.length ? "Rien à générer : semaine(s) figée(s) ("+r.frozen.map(weekDisplay).join(", ")+")." : "Rien à générer."); return; }
+    var msg=(r.weekKeys.length===1 ? "Semaine "+weekDisplay(r.weekKeys[0]) : r.weekKeys.length+" semaines ("+weekDisplay(r.weekKeys[0])+" à "+weekDisplay(r.weekKeys[r.weekKeys.length-1])+")")+
       " : "+r.autoCount+" créneau(x) automatique(s), "+r.gaps.length+" manque(s) non résolu(s).";
-    if(r.frozen.length) msg+="\n\nSemaine(s) figée(s), non modifiée(s) : "+r.frozen.join(", ")+".";
+    if(r.frozen.length) msg+="\n\nSemaine(s) figée(s), non modifiée(s) : "+r.frozen.map(weekDisplay).join(", ")+".";
     if(r.shortfalls.length) msg+="\n\nPlus de 8h sous la cible (aucun jour possible — à compléter à la main) : "+r.shortfalls.join(", ")+".";
     if(r.violators.length) msg+="\n\nSans samedi libre : "+r.violators.join(", ")+".";
     if(r.notPossible.length) msg+="\n(Impossible à libérer — horaire fixe ou créneau manuel tous les samedis : "+r.notPossible.join(", ")+".)";
@@ -1218,15 +1218,15 @@ function runGeneration(baseWeeks, scopeLabel, askLater, skipWarning){
   if(!askLater){
     // Weeks of the range (other than the one shown) that already hold a proposal get completed too.
     var touched=baseWeeks.filter(function(wk){ return wk!==state.ui.currentWeekKey && weekHasAutoShifts(wk, guardScope) && !isWeekFrozen(wk); });
-    if(touched.length && !skipWarning && !confirm("Les semaines "+touched.join(", ")+" contiennent déjà une proposition : elles seront aussi complétées / ajustées (samedis libres compris). Les créneaux placés à la main sont conservés, et aucune autre semaine n'est modifiée.\n\nContinuer ?")) return;
+    if(touched.length && !skipWarning && !confirm("Les semaines "+touched.map(weekDisplay).join(", ")+" contiennent déjà une proposition : elles seront aussi complétées / ajustées (samedis libres compris). Les créneaux placés à la main sont conservés, et aucune autre semaine n'est modifiée.\n\nContinuer ?")) return;
     go(baseWeeks);
     return;
   }
   if(!later.length){ go(baseWeeks); return; }
   askChoice("Semaines suivantes déjà générées",
-    "Les semaines "+later[0]+(later.length>1?" à "+later[later.length-1]:"")+" contiennent déjà une proposition. Les semaines passées ne sont jamais modifiées ; les créneaux placés à la main sont toujours conservés.",
+    "Les semaines "+weekDisplay(later[0])+(later.length>1?" à "+weekDisplay(later[later.length-1]):"")+" contiennent déjà une proposition. Les semaines passées ne sont jamais modifiées ; les créneaux placés à la main sont toujours conservés.",
     [{label:scopeLabel+" seulement", value:"base"},
-     {label:scopeLabel+" et les semaines suivantes déjà générées (jusqu'à "+later[later.length-1]+")", value:"all"}],
+     {label:scopeLabel+" et les semaines suivantes déjà générées (jusqu'à "+weekDisplay(later[later.length-1])+")", value:"all"}],
     function(v){ go(v==="all" ? baseWeeks.concat(later) : baseWeeks); });
 }
 
@@ -4328,7 +4328,7 @@ function renderEmployeeProfile(empId){
       var acc=storeAccessState(emp, st.id);
       return "<button data-store='"+st.id+"' class='store-acc-"+acc+"' title='"+storeAccessTitle(acc)+"' style='width:auto;padding:0 8px'>"+escAttr(st.name)+"</button>";
     }).join("")+"</div><span class='hint'>Cliquez pour faire défiler : autorisé (vert) → seulement si nécessaire (jaune) → non autorisé (gris).</span></div>";
-    html+="<p class='hint'>Semaine "+weekKey+" en cours : "+fmtHoursDisplay(used, fteInWeek(emp, weekKey)<1)+"h travaillées / "+fmtHoursDisplay(target, fteInWeek(emp, weekKey)<1)+"h cible.</p>";
+    html+="<p class='hint'>Semaine "+weekDisplay(weekKey)+" en cours : "+fmtHoursDisplay(used, fteInWeek(emp, weekKey)<1)+"h travaillées / "+fmtHoursDisplay(target, fteInWeek(emp, weekKey)<1)+"h cible.</p>";
 
     html+="<h3>Horaire fixe récurrent (chaque semaine, sauf absence)</h3>";
     (emp.fixedPattern||[]).forEach(function(fp,i){
@@ -6325,7 +6325,7 @@ function renderMyPage(){
   var weekKey=state.ui.currentWeekKey;
   var used=employeeUsedMinutes(empId, weekKey), target=employeeTargetMinutes(emp, weekKey);
   var html="<h2>Mon horaire</h2>";
-  html+="<div class='row' style='align-items:center;gap:10px;margin:4px 0 10px'><button class='btn btn-sm' style='flex:none' id='mp-prev'>‹</button><strong style='flex:none'>"+weekKey+"</strong><button class='btn btn-sm' style='flex:none' id='mp-next'>›</button></div>";
+  html+="<div class='row' style='align-items:center;gap:10px;margin:4px 0 10px'><button class='btn btn-sm' style='flex:none' id='mp-prev'>‹</button><strong style='flex:none'>"+weekDisplay(weekKey)+"</strong><button class='btn btn-sm' style='flex:none' id='mp-next'>›</button></div>";
   html+="<p class='hint'>"+fmtHoursDisplay(used, fteInWeek(emp, weekKey)<1)+"h travaillées / "+fmtHoursDisplay(target, fteInWeek(emp, weekKey)<1)+"h cible.</p>";
   var week=getWeek(weekKey);
   html+="<div class='row' style='flex-wrap:wrap;gap:16px;margin-top:10px'>";
@@ -6560,9 +6560,9 @@ function startApp(){
     });
     var frozen=weeks.filter(isWeekFrozen);
     weeks=weeks.filter(function(wk){ return !isWeekFrozen(wk) && weekHasAutoShifts(wk, genGuardScope()); }).sort();
-    if(!weeks.length){ alert(frozen.length ? "Rien à effacer (semaine(s) figée(s) : "+frozen.join(", ")+")." : "Aucune proposition à effacer sur cette période."); return; }
-    var what = weeks.length===1 ? "la semaine "+weeks[0] : "les "+weeks.length+" semaines ("+weeks[0]+" à "+weeks[weeks.length-1]+")";
-    if(!confirm("Effacer les créneaux générés automatiquement pour "+what+" ?"+(frozen.length?"\nLes semaines figées ("+frozen.join(", ")+") ne sont pas touchées.":"")+"\nLes horaires fixes et les créneaux placés à la main restent.")) return;
+    if(!weeks.length){ alert(frozen.length ? "Rien à effacer (semaine(s) figée(s) : "+frozen.map(weekDisplay).join(", ")+")." : "Aucune proposition à effacer sur cette période."); return; }
+    var what = weeks.length===1 ? "la semaine "+weekDisplay(weeks[0]) : "les "+weeks.length+" semaines ("+weekDisplay(weeks[0])+" à "+weekDisplay(weeks[weeks.length-1])+")";
+    if(!confirm("Effacer les créneaux générés automatiquement pour "+what+" ?"+(frozen.length?"\nLes semaines figées ("+frozen.map(weekDisplay).join(", ")+") ne sont pas touchées.":"")+"\nLes horaires fixes et les créneaux placés à la main restent.")) return;
     // One undo step for the whole range.
     var before=lastSavedJSON, undoDepth=undoStack.length;
     var clearScope = genGuardScope();
