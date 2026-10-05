@@ -4746,14 +4746,20 @@ function employeeWeekAbsenceLabel(emp, weekKey){
 function renderSidebar(validation){
   var el=document.getElementById("sidebar");
   if(!state.employees.length){ el.innerHTML="<p class='empty-note'>Aucun employé. Ajoutez-en dans Configuration.</p>"; return; }
-  var available=[], full=[], absent=[];
+  var available=[], full=[], absent=[], unauthorized=[];
   var wk=state.ui.currentWeekKey;
   state.employees.forEach(function(emp){
-    if(!employeeAllowedAtStore(emp, state.ui.currentStoreId)) return;
+    // Not authorised at this store ("storeAccess" = "no"): the generator never places them here
+    // (employeeAllowedAtStore gates every auto-placement path), but the admin may still need to
+    // hand-place someone exceptionally -- so they stay draggable for the admin, in their own group,
+    // instead of disappearing from the sidebar entirely.
+    var allowed=employeeAllowedAtStore(emp, state.ui.currentStoreId);
+    if(!allowed && !isTrueAdmin()) return;
     if(!weekDates(wk).some(function(d){ return isEmployedOn(emp, dateStr(d)); })) return; // not under contract this week
     var absence=employeeWeekAbsenceLabel(emp, wk);
     if(absence){ absent.push({emp:emp, label:absence}); return; }
     var h=validation.employeeHours[emp.id] || {used:0,target:0,status:"ok"};
+    if(!allowed){ unauthorized.push({emp:emp, h:h}); return; }
     (h.target>0 && (h.diff!=null ? h.diff>=0 : h.used>=h.target) ? full : available).push({emp:emp, h:h}); // same totals as displayed
   });
   function rowHtml(item, draggable){
@@ -4782,6 +4788,10 @@ function renderSidebar(validation){
         "<span class='emp-name' title='"+escAttr(it.emp.name)+"'>"+escAttr(it.emp.name||it.emp.initials)+"</span>"+
         "<span class='emp-hours'>"+escAttr(it.label)+"</span></div>";
     }).join("");
+  }
+  if(unauthorized.length){
+    html += "<h3 style='margin-top:12px' title='Non autorisé(s) dans ce magasin -- la génération automatique ne les y placera jamais, mais vous pouvez les glisser ici vous-même, exceptionnellement.'>Non autorisé(s) ici ("+unauthorized.length+")</h3>";
+    html += unauthorized.map(function(it){return rowHtml(it,true);}).join("");
   }
   el.innerHTML=html;
   el.querySelectorAll(".emp-row.draggable").forEach(function(row){
