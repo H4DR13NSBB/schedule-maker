@@ -9,6 +9,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Schedule Maker">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <style>
 :root{
   --bg:#f3f5f8; --panel:#ffffff; --panel-2:#f8fafc; --border:#e2e6ec; --border-strong:#cfd6df;
@@ -6156,8 +6157,11 @@ function renderDocuments(){
 
   if(!myStores.length) html+="<p class='empty-note'>Aucun magasin.</p>";
   else myStores.forEach(function(s){
-    var list=documents.filter(function(d){ return d.store_id===s.id; });
-    html+="<h3>"+escAttr(s.name)+"</h3>";
+    var list=documents.filter(function(d){ return d.store_id===s.id; }).slice().sort(function(a,b){
+      var na=weekNumFromLabel(a.week_label), nb=weekNumFromLabel(b.week_label);
+      return na!==nb ? na-nb : a.week_label.localeCompare(b.week_label);
+    });
+    html+="<details style='margin-top:10px'><summary class='setup-group-title'>"+escAttr(s.name)+" ("+list.length+")</summary>";
     if(!list.length) html+="<p class='empty-note'>Aucun document.</p>";
     else {
       html+="<table><thead><tr><th>Semaine</th><th>Fichier</th><th>Déposé le</th><th></th></tr></thead><tbody>";
@@ -6167,7 +6171,9 @@ function renderDocuments(){
           "<button class='icon-btn' data-action='doc-delete' title='Supprimer'>✕</button></td></tr>";
       });
       html+="</tbody></table>";
+      html+="<button class='btn btn-sm' style='margin-top:8px' data-action='doc-download-store' data-store='"+s.id+"'>Télécharger tout ("+list.length+")</button>";
     }
+    html+="</details>";
   });
 
   el.innerHTML=html;
@@ -6189,10 +6195,24 @@ function renderDocuments(){
     btn.addEventListener("click", function(){
       var doc=documents.find(function(d){ return d.id===btn.closest("[data-doc]").getAttribute("data-doc"); });
       if(!doc) return;
-      sb.storage.from("documents").createSignedUrl(doc.file_path, 3600).then(function(res){
-        if(res.error){ alert("Erreur : "+res.error.message); return; }
-        window.open(res.data.signedUrl, "_blank");
+      var store=getStore(doc.store_id);
+      var oldLabel=btn.textContent; btn.disabled=true; btn.textContent="…";
+      fetchDocumentBlob(doc).then(function(blob){
+        saveBlobAs(blob, docDownloadName(store?store.name:doc.store_id, doc));
+      }).catch(function(err){ alert("Erreur : "+(err&&err.message||err)); }).then(function(){
+        btn.disabled=false; btn.textContent=oldLabel;
       });
+    });
+  });
+  el.querySelectorAll("[data-action=doc-download-store]").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var storeId=btn.getAttribute("data-store"), store=getStore(storeId);
+      var list=documents.filter(function(d){ return d.store_id===storeId; });
+      if(!list.length) return;
+      var oldLabel=btn.textContent; btn.disabled=true; btn.textContent="Préparation…";
+      downloadStoreZip(storeId, store?store.name:storeId, list).catch(function(err){
+        alert("Erreur : "+(err&&err.message||err));
+      }).then(function(){ btn.disabled=false; btn.textContent=oldLabel; });
     });
   });
   el.querySelectorAll("[data-action=doc-delete]").forEach(function(btn){
@@ -6220,6 +6240,53 @@ function uploadDocument(storeId, weekLabel, file){
     return sb.from("documents").insert({store_id:storeId, week_label:weekLabel, file_path:path, file_name:file.name});
   }).then(function(res){
     if(res && res.error) throw res.error;
+  });
+}
+// The number inside a free-text week label like "S34" -- used to sort a store's documents
+// chronologically regardless of what the uploader actually typed. No number: sorts last.
+function weekNumFromLabel(label){
+  var m=(label||"").match(/(\d+)/);
+  return m ? parseInt(m[1],10) : Infinity;
+}
+// "Lausanne_S34.png" -- the name a document is saved as locally, however it was originally named.
+function docDownloadName(storeName, doc){
+  var ext="", dot=(doc.file_name||"").lastIndexOf(".");
+  if(dot>=0) ext=doc.file_name.slice(dot);
+  var safe=function(s){ return (s||"").replace(/[^A-Za-z0-9_-]+/g,"_").replace(/^_+|_+$/g,""); };
+  return safe(storeName)+"_"+(safe(doc.week_label)||"semaine")+ext;
+}
+function fetchDocumentBlob(doc){
+  return sb.storage.from("documents").createSignedUrl(doc.file_path, 3600).then(function(res){
+    if(res.error) throw res.error;
+    return fetch(res.data.signedUrl);
+  }).then(function(r){ return r.blob(); });
+}
+function saveBlobAs(blob, fileName){
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement("a");
+  a.href=url; a.download=fileName;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 10000);
+}
+// Every document of one store, zipped together -- a name collision (two uploads both called "S34",
+// say) gets "_2", "_3", … appended so nothing in the zip silently overwrites another entry.
+function downloadStoreZip(storeId, storeName, list){
+  var zip=new JSZip(), used={};
+  return Promise.all(list.map(function(d){
+    return fetchDocumentBlob(d).then(function(blob){
+      var name=docDownloadName(storeName, d);
+      if(used[name]){
+        used[name]++;
+        var dot=name.lastIndexOf(".");
+        name = dot>=0 ? name.slice(0,dot)+"_"+used[name]+name.slice(dot) : name+"_"+used[name];
+      } else used[name]=1;
+      zip.file(name, blob);
+    });
+  })).then(function(){
+    return zip.generateAsync({type:"blob"});
+  }).then(function(blob){
+    var safe=storeName.replace(/[^A-Za-z0-9_-]+/g,"_").replace(/^_+|_+$/g,"");
+    saveBlobAs(blob, safe+".zip");
   });
 }
 function renderAll(){ renderSetup(); renderSchedule(); renderData(); if(currentProfile && currentProfile.employee_id && currentProfile.role!=="employee") renderMyPage(); }
