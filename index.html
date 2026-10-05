@@ -5852,9 +5852,9 @@ function renderLeaveTabEmployee(el){
   if(!emp){ el.innerHTML="<h2>Mes demandes</h2><p class='empty-note'>Votre compte n'est lié à aucune fiche employé. Contactez l'administrateur.</p>"; return; }
   var today=dateStr(new Date());
   var html="<h2>Mes demandes</h2>";
-  html+="<p class='hint'>Une demande de <b>congé</b> est une absence ponctuelle et ne compte pas sur vos jours de vacances ; une demande de <b>vacances</b> est déduite de votre solde annuel.</p>";
+  html+="<p class='hint'>Une demande de <b>congé</b> est une absence ponctuelle et ne compte pas sur vos jours de vacances ; une demande de <b>vacances</b> est déduite de votre solde annuel ; une déclaration de <b>maladie</b> est ajoutée directement à vos absences, sans attendre d'approbation.</p>";
   html+="<div class='row' style='max-width:640px;flex-wrap:wrap;align-items:flex-end'>";
-  html+="<div class='field' style='flex:none;width:140px'><label>Type</label><select id='lr-type'><option value='vacation'>Vacances</option><option value='dayoff'>Congé</option></select></div>";
+  html+="<div class='field' style='flex:none;width:140px'><label>Type</label><select id='lr-type'><option value='vacation'>Vacances</option><option value='dayoff'>Congé</option><option value='sick'>Maladie</option></select></div>";
   html+="<div class='row' style='flex:none;gap:10px'>";
   html+="<div class='field' style='flex:none'><label>Du</label><input type='date' id='lr-start' value='"+today+"'></div>";
   html+="<div class='field' style='flex:none'><label>Au</label><input type='date' id='lr-end' value='"+today+"'></div>";
@@ -5902,7 +5902,11 @@ function renderLeaveTabEmployee(el){
     if(end<start){ alert("La date de fin doit être après la date de début."); return; }
     var note=el.querySelector("#lr-note").value.trim();
     var btn=el.querySelector("#lr-send"); btn.disabled=true;
-    sb.from("leave_requests").insert({employee_id:empId, type:type, start_date:start, end_date:end, note:note, status:"pending"}).then(function(res){
+    // Maladie: self-serve, like a flexible employee's ordinary logged hours -- goes straight to
+    // "approved" (see the "send" policy on leave_requests in schema.sql), which immediately mirrors
+    // it into emp.absences via the leave_request_to_absence trigger. No one needs to sign off on
+    // someone reporting they're sick.
+    sb.from("leave_requests").insert({employee_id:empId, type:type, start_date:start, end_date:end, note:note, status: type==="sick" ? "approved" : "pending"}).then(function(res){
       if(res.error){ alert("Erreur : "+res.error.message); btn.disabled=false; return; }
       return loadLeaveRequests().then(function(){ renderLeaveTabEmployee(el); });
     });
