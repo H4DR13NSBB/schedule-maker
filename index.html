@@ -6050,7 +6050,7 @@ function renderMyInfo(){
   html+="<h3 style='margin-top:22px'>Mon contrat</h3>";
   html+="<div class='row' style='flex-wrap:wrap;gap:22px 32px'>";
   html+="<div><div class='hint'>Taux</div><div style='font-size:19px;font-weight:700'>"+Math.round(fte*100)+" %</div></div>";
-  html+="<div><div class='hint'>Type de contrat</div><div style='font-size:19px;font-weight:700'>"+(emp.worksFromHome?"Flexible":contractLabel(contract?contract.type:"salaried"))+"</div></div>";
+  html+="<div><div class='hint'>Type de contrat</div><div style='font-size:19px;font-weight:700'>"+contractLabel(contract?contract.type:"salaried")+(emp.worksFromHome?" (flexible)":"")+"</div></div>";
   if(myStores.length) html+="<div><div class='hint'>Magasin(s)</div><div style='font-size:19px;font-weight:700'>"+myStores.map(function(s){ return escAttr(s.name); }).join(", ")+"</div></div>";
   if(vacBalance) html+="<div><div class='hint' title='Jours restants / droit de l&#39;année (vacances à 100 % × taux, au prorata des jours sous contrat)'>Solde vacances "+y+"</div><div style='font-size:19px;font-weight:700'>"+vacBalance.remaining+" / "+vacBalance.entitled+" j</div></div>";
   html+="</div>";
