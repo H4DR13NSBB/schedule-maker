@@ -6377,12 +6377,16 @@ function startApp(){
     renderSchedule();
   });
   document.getElementById("btn-print-all").addEventListener("click", function(){
+    var title="Plannings — "+weekDisplay(state.ui.currentWeekKey);
+    // An employee only ever prints their own store(s), for their own reference -- there's no reason
+    // to ask staff/manager/signature questions that don't apply to them, so skip the layout choice
+    // and go straight to the no-signature version.
+    if(currentProfile && currentProfile.role==="employee"){ doPrintCompact(myPrintStores(), title); return; }
     askChoice("Imprimer",
       "Choisissez la mise en page.",
       [{label:"Un magasin par page, avec case de signature", value:"full"},
        {label:"Tous les magasins sur une page, sans signatures", value:"compact"}],
       function(mode){
-        var title="Plannings — "+weekDisplay(state.ui.currentWeekKey);
         var isAdmin=!currentProfile || currentProfile.role==="admin"; // offline: single user, treated as admin
         if(isAdmin && !isAdminLight()){
           getWeek(state.ui.currentWeekKey).printedAt=new Date().toISOString();
