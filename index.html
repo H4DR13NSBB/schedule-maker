@@ -380,7 +380,7 @@ body.is-admin-light .emp-row.draggable{cursor:default;pointer-events:none;}
   .btn{padding:8px 13px;}
   .btn-sm{padding:7px 11px;font-size:13px;}
   /* 16px keeps iOS Safari from auto-zooming the page when one of these gets focused */
-  input[type=text],input[type=password],input[type=number],input[type=date],input[type=time],select{font-size:16px;}
+  input[type=text],input[type=password],input[type=number],input[type=date],input[type=time],input[type=tel],input[type=email],select{font-size:16px;}
 }
 
 #printArea{display:none;}
@@ -1532,6 +1532,11 @@ function mayWrite(entry){
     // already scoped to their store, so anything present locally is fair game to push -- the
     // server-side trigger rejects any other field change for a plain manager (not a store admin).
     if(entry.table==="employees") return true;
+  }
+  if(currentProfile.role==="employee"){
+    // "Mes infos": an employee may push their own employee row -- the server-side trigger rejects
+    // anything but a phone/email change (see employee_may_only_touch_contact() in schema.sql).
+    if(entry.table==="employees") return entry.row.id===currentProfile.employee_id;
   }
   return false;
 }
@@ -6013,6 +6018,55 @@ function updatePrintButtonLabel(){
   btn.textContent = n===0 ? "Aucun magasin à imprimer" : n===1 ? "Imprimer le magasin" : "Imprimer les "+n+" magasins";
 }
 
+// "Mes infos": every employee's self-service page -- their own contact details (phone/email, the
+// only fields their account is allowed to write -- see employee_may_only_touch_contact() in
+// schema.sql) plus a read-only summary of their contract and vacation balance. Shown to anyone with
+// an employee link, not just role="employee" (a manager/admin linked to a record benefits too).
+function renderMyInfo(){
+  var el=document.getElementById("card-myinfo");
+  if(!el || !currentProfile) return;
+  var empId=currentProfile.employee_id, emp=empId && getEmployee(empId);
+  if(!emp){ el.innerHTML="<h2>Mes infos</h2><p class='empty-note'>Votre compte n'est lié à aucune fiche employé.</p>"; return; }
+  var today=dateStr(new Date());
+  var contract=contractOn(emp, today);
+  var fte=fteOn(emp, today);
+  var y=new Date().getFullYear();
+  var yr=employeePeriodSummary(emp, y+"-01-01", y+"-12-31");
+  var carriedDays=yearCarryVacationDays(emp, y);
+  var daysInYear=Math.round((new Date(y+1,0,1)-new Date(y,0,1))/86400000);
+  var vacBalance=null;
+  if(emp.vacationDaysPerYear!=null || carriedDays){
+    var entitled=emp.vacationDaysPerYear!=null ? Math.round(emp.vacationDaysPerYear*yr.fteDays/daysInYear*2)/2 : 0;
+    vacBalance={remaining:entitled+carriedDays-yr.vacation, entitled:entitled+carriedDays};
+  }
+  var myStores=state.stores.filter(function(s){ return storeAccessState(emp, s.id)!=="no"; });
+
+  var html="<h2>Mes infos</h2>";
+  html+="<div style='max-width:420px'>";
+  html+="<div class='field'><label>Téléphone</label><input type='tel' id='mi-phone' inputmode='tel' placeholder='p.ex. 079 123 45 67' value='"+escAttr(emp.phone||"")+"'></div>";
+  html+="<div class='field'><label>E-mail</label><input type='email' id='mi-email' inputmode='email' placeholder='p.ex. prenom@exemple.com' value='"+escAttr(emp.email||"")+"'></div>";
+  html+="</div>";
+
+  html+="<h3 style='margin-top:22px'>Mon contrat</h3>";
+  html+="<div class='row' style='flex-wrap:wrap;gap:22px 32px'>";
+  html+="<div><div class='hint'>Taux</div><div style='font-size:19px;font-weight:700'>"+Math.round(fte*100)+" %</div></div>";
+  html+="<div><div class='hint'>Type de contrat</div><div style='font-size:19px;font-weight:700'>"+(emp.worksFromHome?"Flexible":contractLabel(contract?contract.type:"salaried"))+"</div></div>";
+  if(myStores.length) html+="<div><div class='hint'>Magasin(s)</div><div style='font-size:19px;font-weight:700'>"+myStores.map(function(s){ return escAttr(s.name); }).join(", ")+"</div></div>";
+  if(vacBalance) html+="<div><div class='hint' title='Jours restants / droit de l&#39;année (vacances à 100 % × taux, au prorata des jours sous contrat)'>Solde vacances "+y+"</div><div style='font-size:19px;font-weight:700'>"+vacBalance.remaining+" / "+vacBalance.entitled+" j</div></div>";
+  html+="</div>";
+  html+="<p class='hint' style='margin-top:14px'>Pour tout changement de taux, de contrat ou de droit aux vacances, contactez l'administrateur.</p>";
+
+  el.innerHTML=html;
+  function saveField(field, input){
+    var v=input.value.trim();
+    if((emp[field]||"")===v) return;
+    emp[field]=v;
+    saveState();
+  }
+  var phoneInput=document.getElementById("mi-phone"), emailInput=document.getElementById("mi-email");
+  phoneInput.addEventListener("change", function(){ saveField("phone", phoneInput); });
+  emailInput.addEventListener("change", function(){ saveField("email", emailInput); });
+}
 function renderAll(){ renderSetup(); renderSchedule(); renderData(); if(currentProfile && currentProfile.employee_id && currentProfile.role!=="employee") renderMyPage(); }
 
 function switchTab(tab){
