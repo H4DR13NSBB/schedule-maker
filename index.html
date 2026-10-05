@@ -72,6 +72,7 @@ header.topnav h1{font-size:17px;font-weight:700;letter-spacing:-.01em;margin:0;m
 .tab-btn{border:none;background:none;padding:6px 16px;border-radius:7px;color:var(--muted);font-weight:600;transition:background .15s,color .15s,box-shadow .15s;}
 .tab-btn:hover{color:var(--text);}
 .tab-btn.active{background:var(--panel);color:var(--accent);box-shadow:0 1px 3px rgba(16,24,40,.12), 0 0 0 1px var(--border);}
+.tab-dot{width:8px;height:8px;border-radius:50%;background:var(--danger);margin-left:6px;vertical-align:middle;}
 .spacer{flex:1;}
 .brand{display:flex;align-items:center;gap:10px;}
 .tool-group{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:5px 7px;background:var(--panel);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow-sm);}
@@ -475,7 +476,7 @@ body.is-admin-light .emp-row.draggable{cursor:default;pointer-events:none;}
     <button class="tab-btn myinfo-only" data-tab="myinfo" id="tab-myinfo-btn">Mes infos</button>
     <button class="tab-btn staff-only" data-tab="setup">Configuration</button>
     <button class="tab-btn store-admin-ok" data-tab="data">Analyse</button>
-    <button class="tab-btn online-only" data-tab="leave" id="tab-leave-btn">Demandes</button>
+    <button class="tab-btn online-only" data-tab="leave" id="tab-leave-btn"><span id="tab-leave-label">Demandes</span><span class="tab-dot" id="tab-leave-dot" style="display:none"></span></button>
     <button class="tab-btn flex-hours-only" data-tab="myhours">Mes heures</button>
     <button class="tab-btn staff-only" data-tab="absences">Absences</button>
   </div>
@@ -1559,6 +1560,7 @@ function loadLeaveRequests(){
     if(res.error){ console.error("loadLeaveRequests failed", res.error); return; }
     leaveRequests=res.data||[];
     purgeOldCancelledRequests();
+    updateLeaveTabDot();
   });
 }
 // Hours a "flexible" (worksFromHome) employee logs themselves instead of being scheduled in shifts
@@ -1569,7 +1571,21 @@ function loadHourLogs(){
   return sb.from("hour_logs").select("*").order("log_date",{ascending:false}).then(function(res){
     if(res.error){ console.error("loadHourLogs failed", res.error); return; }
     hourLogs=res.data||[];
+    updateLeaveTabDot();
   });
+}
+// A red dot on the "Demandes" tab whenever something there needs a staff decision -- a pending leave
+// request, a pending overtime hour log, or an already-approved leave whose cancellation was
+// requested. Kept in sync by loadLeaveRequests()/loadHourLogs() themselves (called on every load,
+// live update, and after every decide/delete action), so nothing else needs to remember to call it.
+function updateLeaveTabDot(){
+  var dot=document.getElementById("tab-leave-dot");
+  if(!dot) return;
+  var needsAttention = !!currentProfile && (currentProfile.role==="admin" || currentProfile.role==="manager") && (
+    leaveRequests.some(function(r){ return r.status==="pending" || r.cancel_requested; }) ||
+    hourLogs.some(function(h){ return h.overtime && h.status==="pending"; })
+  );
+  dot.style.display = needsAttention ? "inline-block" : "none";
 }
 // Calls the "manage-account" edge function (create/update/set-secret/delete a login) — admin only.
 function manageAccount(action, payload){
@@ -1831,7 +1847,7 @@ function bootOnline(user){
       if(state.ui.currentStoreId && !getStore(state.ui.currentStoreId)) state.ui.currentStoreId = state.stores[0] ? state.stores[0].id : null;
       document.getElementById("login-screen").hidden=true;
       document.getElementById("account-label").textContent=currentProfile.display_name+" · "+({admin:"administrateur", manager:"gérant(e)", employee:"employé(e)"}[currentProfile.role]||currentProfile.role)+(isAdminLight()?" (lecture seule)":"");
-      document.getElementById("tab-leave-btn").textContent = currentProfile.role==="employee" ? "Mes demandes" : "Demandes";
+      document.getElementById("tab-leave-label").textContent = currentProfile.role==="employee" ? "Mes demandes" : "Demandes";
       startApp();
       scheduleSync(); // sends what the migration or the first import changed (admin only)
       sb.channel("db").on("postgres_changes", {event:"*", schema:"public"}, onRemoteChange).subscribe();
