@@ -155,6 +155,7 @@ input[type=color]{width:32px;height:26px;padding:0;border:1px solid var(--border
 .dow-chip.on{background:var(--accent);color:var(--accent-fg);}
 .dow-chip.soft{background:#eab308;color:#1c2126;}
 .dow-chip.mandatory{background:#f97316;color:#fff;}
+.abs-store-filter{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}
 .abs-cal-row{display:flex;gap:20px;margin-top:8px;align-items:flex-start;}
 .abs-cal{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;flex:1 1 0;min-width:0;}
 .abs-cal-title{padding:8px 10px;font-size:14px;font-weight:700;background:var(--panel-2);border-bottom:1px solid var(--border);}
@@ -5958,8 +5959,25 @@ function renderLeaveTabEmployee(el){
 
 /* ---------- Absences dashboard (admin/manager): a month calendar of who's off and why ---------- */
 var absencesPeriod={year:(new Date()).getFullYear(), month:(new Date()).getMonth()};
+// Store filter for the calendar and request lists: ids of the selected stores, or null for all.
+// An employee belongs to a store where they may work freely (storeAccess "yes").
+var absencesStoreFilter=null;
+function absencesFilterStores(){
+  var scope=myStoreScope();
+  return scope ? state.stores.filter(function(s){ return scope.indexOf(s.id)>=0; }) : state.stores;
+}
+function absencesActiveStoreIds(){
+  var ids=absencesFilterStores().map(function(s){ return s.id; });
+  if(!absencesStoreFilter) return null;
+  var sel=absencesStoreFilter.filter(function(id){ return ids.indexOf(id)>=0; });
+  return sel.length ? sel : null;
+}
+function empMatchesAbsencesFilter(emp){
+  var sel=absencesActiveStoreIds();
+  return !sel || sel.some(function(sid){ return storeAccessState(emp, sid)==="yes"; });
+}
 function holidaysOnDate(ds){
-  var scope=managerStoreIds();
+  var scope=absencesActiveStoreIds() || managerStoreIds();
   return state.holidays.filter(function(h){
     if(h.date!==ds) return false;
     return !scope || scope.some(function(sid){ return holidayAppliesToStore(h, sid); });
@@ -5970,6 +5988,7 @@ function holidaysOnDate(ds){
 function absenceDayInfo(ds){
   var confirmed=[], pending=[];
   state.employees.forEach(function(emp){
+    if(!empMatchesAbsencesFilter(emp)) return;
     (emp.absences||[]).forEach(function(ab){
       if(ds>=ab.startDate && ds<=ab.endDate) confirmed.push({emp:emp, type:ab.type});
     });
@@ -5977,7 +5996,7 @@ function absenceDayInfo(ds){
   leaveRequests.forEach(function(lr){
     if(lr.status!=="pending" || ds<lr.start_date || ds>lr.end_date) return;
     var emp=getEmployee(lr.employee_id);
-    if(emp) pending.push({emp:emp, type:lr.type, lr:lr});
+    if(emp && empMatchesAbsencesFilter(emp)) pending.push({emp:emp, type:lr.type, lr:lr});
   });
   return {holidays:holidaysOnDate(ds), confirmed:confirmed, pending:pending};
 }
@@ -6026,10 +6045,19 @@ function renderAbsencesTab(){
     "<button class='btn' id='abs-prev' title='Mois précédent'>‹</button>"+
     "<button class='btn' id='abs-next' title='Mois suivant'>›</button></div>"+
     "<button class='btn' id='abs-today'>Aujourd'hui</button></div>";
+  var filterStores=absencesFilterStores(), activeStores=absencesActiveStoreIds();
+  if(filterStores.length>1){
+    html+="<div class='abs-store-filter'><button class='store-tab-btn"+(activeStores?"":" active")+"' data-abs-store=''>Tous les magasins</button>"+
+      filterStores.map(function(s){
+        var on=!!activeStores && activeStores.indexOf(s.id)>=0;
+        return "<button class='store-tab-btn"+(on?" active":"")+"' data-abs-store='"+s.id+"' style='"+(on?("background:"+s.color+";border-color:"+s.color):"")+"'>"+escAttr(s.name)+"</button>";
+      }).join("")+"</div>";
+  }
   html+="<p class='hint'>Cliquez un jour pour le détail"+(isAdmin?" et approuver/refuser les demandes en attente":"")+". Couleur pleine = absence confirmée ; contour en pointillé = demande en attente.</p>";
   html+="<div class='abs-cal-row'>"+buildAbsenceMonthHtml(y,m)+buildAbsenceMonthHtml(y2,m2)+"</div>";
 
-  var pendingAll=leaveRequests.filter(function(lr){ return lr.status==="pending"; }).slice().sort(function(a,b){ return a.start_date<b.start_date?-1:1; });
+  var lrMatches=function(lr){ var e=getEmployee(lr.employee_id); return !e || empMatchesAbsencesFilter(e); };
+  var pendingAll=leaveRequests.filter(function(lr){ return lr.status==="pending" && lrMatches(lr); }).slice().sort(function(a,b){ return a.start_date<b.start_date?-1:1; });
   html+="<h3 style='margin-top:18px'>Demandes en attente ("+pendingAll.length+")</h3>";
   if(!pendingAll.length) html+="<p class='empty-note'>Aucune.</p>";
   else {
@@ -6045,7 +6073,7 @@ function renderAbsencesTab(){
   // Accepted requests: a manager sees every approved request of their own team (not just the ones
   // an employee flagged for cancellation) and can cancel any of them outright -- see the loosened
   // "withdraw" RLS policy on leave_requests in schema.sql.
-  var acceptedAll=leaveRequests.filter(function(lr){ return lr.status==="approved"; }).slice().sort(function(a,b){ return a.start_date<b.start_date?-1:1; });
+  var acceptedAll=leaveRequests.filter(function(lr){ return lr.status==="approved" && lrMatches(lr); }).slice().sort(function(a,b){ return a.start_date<b.start_date?-1:1; });
   if(isAdmin){
     html+="<h3 style='margin-top:18px'>Demandes acceptées ("+acceptedAll.length+")</h3>";
     if(!acceptedAll.length) html+="<p class='empty-note'>Aucune.</p>";
@@ -6063,12 +6091,12 @@ function renderAbsencesTab(){
   // Add a leave directly (vacances/congé/maladie/indisponible) for one of the manager's own
   // employees -- same mechanism as the equivalent form in Configuration (pushes straight into
   // emp.absences; no request/approval step needed since a manager is the one approving anyway).
-  if(isAdmin && state.employees.length){
+  if(isAdmin && state.employees.some(empMatchesAbsencesFilter)){
     var todayAdd=dateStr(new Date());
     html+="<h3 style='margin-top:18px'>Ajouter une absence</h3>";
     html+="<div class='row' style='flex-wrap:wrap;align-items:flex-end;gap:10px;max-width:680px'>";
     html+="<div class='field' style='flex:none;width:170px'><label>Employé</label><select id='abs-add-emp'>"+
-      state.employees.slice().sort(function(a,b){ return (a.name||"").localeCompare(b.name||""); }).map(function(e){ return "<option value='"+e.id+"'>"+escAttr(e.name)+"</option>"; }).join("")+"</select></div>";
+      state.employees.filter(empMatchesAbsencesFilter).sort(function(a,b){ return (a.name||"").localeCompare(b.name||""); }).map(function(e){ return "<option value='"+e.id+"'>"+escAttr(e.name)+"</option>"; }).join("")+"</select></div>";
     html+="<div class='field' style='flex:none;width:140px'><label>Type</label><select id='abs-add-type'>"+
       "<option value='vacation'>Vacances</option><option value='dayoff'>Congé</option><option value='sick'>Maladie</option><option value='unavailable'>Indisponible</option></select></div>";
     html+="<div class='field' style='flex:none'><label>Du</label><input type='date' id='abs-add-start' value='"+todayAdd+"'></div>";
@@ -6082,6 +6110,16 @@ function renderAbsencesTab(){
   document.getElementById("abs-prev").addEventListener("click", function(){ shiftAbsencesMonth(-1); });
   document.getElementById("abs-next").addEventListener("click", function(){ shiftAbsencesMonth(1); });
   document.getElementById("abs-today").addEventListener("click", function(){ var t=new Date(); absencesPeriod={year:t.getFullYear(), month:t.getMonth()}; renderAbsencesTab(); });
+  el.querySelectorAll("[data-abs-store]").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var id=btn.getAttribute("data-abs-store");
+      if(!id){ absencesStoreFilter=null; renderAbsencesTab(); return; }
+      var sel=(absencesActiveStoreIds()||[]).slice(), i=sel.indexOf(id);
+      if(i>=0) sel.splice(i,1); else sel.push(id);
+      absencesStoreFilter=sel.length ? sel : null;
+      renderAbsencesTab();
+    });
+  });
   el.querySelectorAll(".abs-day").forEach(function(cell){
     cell.addEventListener("click", function(){ openAbsenceDayModal(cell.getAttribute("data-date")); });
   });
