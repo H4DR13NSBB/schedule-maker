@@ -59,6 +59,14 @@ input,select{font:inherit;}
 .btn-primary:hover{background:var(--accent-hover);border-color:var(--accent-hover);color:var(--accent-fg);}
 .btn-danger{color:var(--danger);border-color:color-mix(in srgb, var(--danger) 45%, var(--border));}
 .btn-danger:hover{background:var(--danger-soft);border-color:var(--danger);color:var(--danger);}
+/* "Partager": gray = not shared yet, green = shared as is, red = changed since it was shared */
+.btn-share{font-weight:600;color:#fff;background:#6b7280;border-color:#6b7280;}
+.btn-share.shared{background:var(--ok);border-color:var(--ok);}
+.btn-share.changed{background:var(--danger);border-color:var(--danger);}
+.btn-share:hover{color:#fff;filter:brightness(1.08);}
+.btn-share.shared,.btn-share.changed{color:#fff;}
+@media (prefers-color-scheme: dark){ .btn-share,.btn-share:hover,.btn-share.shared,.btn-share.changed{color:#0b1220;} .btn-share{background:#9ca3af;border-color:#9ca3af;} }
+.unshared-notice{margin:0 0 10px;padding:8px 12px;border-radius:var(--radius-sm);background:var(--warn-soft);color:var(--warn);font-weight:600;}
 .btn-sm{padding:4px 10px;font-size:12.5px;border-radius:7px;}
 .btn:disabled{opacity:.5;cursor:default;transform:none;}
 .btn:disabled:hover{border-color:var(--border-strong);color:var(--text);}
@@ -551,6 +559,7 @@ body.is-admin-light .emp-row.draggable{cursor:default;pointer-events:none;}
       <button class="btn btn-sm" id="btn-today">Aujourd'hui</button>
       <label class="freeze-toggle store-admin-ok" id="freeze-label" title="Une semaine figée ne peut plus être modifiée (grille, génération, horaires fixes). Cochée automatiquement à l'impression ; décochez pour modifier."><input type="checkbox" id="chk-freeze"> <span id="freeze-label-text">🔒 Verrouiller la semaine</span></label>
       <div class="spacer"></div>
+      <button class="btn btn-share store-admin-ok" id="btn-share" hidden>Partager</button>
       <button class="btn btn-primary" id="btn-print-all">Imprimer les magasins</button>
     </div>
     <div class="action-bar store-admin-ok">
@@ -577,6 +586,7 @@ body.is-admin-light .emp-row.draggable{cursor:default;pointer-events:none;}
     </div>
     <div class="store-tabs" id="store-tabs"></div>
     <div class="summary-bar" id="summary-bar"></div>
+    <div class="unshared-notice" id="unshared-notice" hidden></div>
     <div class="layout">
       <div class="sidebar staff-only" id="sidebar"></div>
       <div class="sidebar employee-only" id="employee-agenda" hidden></div>
@@ -1086,6 +1096,71 @@ function weeksOfMonth(year, month){
   return out;
 }
 function isWeekFrozen(weekKey){ var w=state.weeks[weekKey]; return !!(w && w.frozen); }
+/* "Partager": until the admin (or a store admin) shares a week, plain managers and employees can't
+   see its shifts at all -- the database's shift read rule checks week.shared[storeId] (see
+   week_store_shared() in schema.sql). Each shared store keeps a fingerprint of its shifts at the
+   time, so the button can turn red when the week has been changed since. Per store, not per week:
+   a store admin only ever sees (and so can only fingerprint) their own store's shifts. */
+function storeShiftsSig(weekKey, storeId){
+  var parts=(getWeek(weekKey).shifts||[]).filter(function(s){ return s.storeId===storeId; })
+    .map(function(s){ return [s.employeeId||"", s.date, s.start, s.end, s.note||""].join("|"); }).sort();
+  var h=5381, str=parts.join("\n");
+  for(var i=0;i<str.length;i++) h=((h<<5)+h+str.charCodeAt(i))|0;
+  return parts.length+"-"+(h>>>0).toString(36);
+}
+// Keep in step with week_store_shared() in schema.sql.
+function isWeekStoreShared(weekKey, storeId){ var w=state.weeks[weekKey]; return !!(w && w.shared && w.shared[storeId]); }
+// Plain managers (and employees) can't see a week nobody has shared yet: nothing to edit there either.
+function isWeekHiddenForMe(weekKey){
+  return isManager() && !isStoreAdmin() && !(currentProfile.store_ids||[]).some(function(id){ return isWeekStoreShared(weekKey, id); });
+}
+// "none" | "shared" | "changed" over the given stores. A sig of "" (weeks already sent before this
+// feature existed, marked shared by schema.sql) counts as matching.
+function weekShareStatus(weekKey, stores){
+  var w=getWeek(weekKey), shared=w.shared||{}, all=stores.length>0, changed=false;
+  stores.forEach(function(st){
+    var e=shared[st.id];
+    if(!e){ all=false; return; }
+    if(e.sig && e.sig!==storeShiftsSig(weekKey, st.id)) changed=true;
+  });
+  return changed ? "changed" : all ? "shared" : "none";
+}
+function shareWeek(weekKey, stores){
+  var w=getWeek(weekKey), at=new Date().toISOString();
+  w.shared=w.shared||{};
+  stores.forEach(function(st){ w.shared[st.id]={at:at, sig:storeShiftsSig(weekKey, st.id)}; });
+}
+function unshareWeek(weekKey, stores){
+  var w=getWeek(weekKey);
+  if(!w.shared) return;
+  stores.forEach(function(st){ delete w.shared[st.id]; });
+  if(!Object.keys(w.shared).length) delete w.shared;
+}
+function renderShareButton(){
+  var btn=document.getElementById("btn-share");
+  var may=ONLINE && hasAdminAccess();
+  btn.hidden=!may;
+  var notice=document.getElementById("unshared-notice");
+  var hidden=isWeekHiddenForMe(state.ui.currentWeekKey);
+  notice.hidden=!hidden;
+  if(hidden) notice.textContent="Le planning de cette semaine n'a pas encore été partagé.";
+  if(!may) return;
+  var wk=state.ui.currentWeekKey, stores=myPrintStores(), w=getWeek(wk);
+  // Weeks shared before fingerprints existed: take today's shifts as the reference, once.
+  if(!isAdminLight() && stores.some(function(st){ return w.shared && w.shared[st.id] && !w.shared[st.id].sig; })){
+    stores.forEach(function(st){ if(w.shared && w.shared[st.id] && !w.shared[st.id].sig) w.shared[st.id].sig=storeShiftsSig(wk, st.id); });
+    saveState();
+  }
+  var status=weekShareStatus(wk, stores);
+  btn.classList.toggle("shared", status==="shared");
+  btn.classList.toggle("changed", status==="changed");
+  btn.textContent = status==="shared" ? "✓ Partagé" : status==="changed" ? "Partager les modifications" : "Partager";
+  var sharedNames=stores.filter(function(st){ return isWeekStoreShared(wk, st.id); }).map(function(st){ return st.name; });
+  btn.title = status==="shared" ? "Visible par les gérants et les employés. Cliquez pour retirer le partage." :
+    status==="changed" ? "La semaine a été modifiée depuis le partage : les gérants et employés voient déjà ces modifications, cliquez pour les valider." :
+    sharedNames.length ? "Partagé pour : "+sharedNames.join(", ")+". Cliquez pour partager tous les magasins." :
+    "Les gérants et les employés ne voient pas encore cette semaine. Cliquez pour la partager.";
+}
 var FROZEN_MSG="Cette semaine est figée (déjà imprimée / envoyée). Décochez « Semaine figée » en haut pour la modifier.";
 // `scope`, when given, restricts the check to those store id(s) -- generation only ever touches the
 // currently selected store, so "already has a proposal" shouldn't be triggered by another store's.
@@ -1534,7 +1609,8 @@ function mayWrite(entry){
   if(!currentProfile) return false;
   if(currentProfile.role==="admin") return true;
   if(currentProfile.role==="manager"){
-    if(entry.table==="shifts") return (currentProfile.store_ids||[]).indexOf(entry.row.store_id)>=0 && !isWeekFrozen(entry.row.week_key);
+    if(entry.table==="shifts") return (currentProfile.store_ids||[]).indexOf(entry.row.store_id)>=0 && !isWeekFrozen(entry.row.week_key)
+      && (isStoreAdmin() || isWeekStoreShared(entry.row.week_key, entry.row.store_id)); // not shared yet: invisible to a plain manager
     if(entry.table==="config" && entry.row.key==="holidays") return true; // managers may add holidays for their own store
     if(entry.table==="config" && entry.row.key==="staffingRules") return isStoreAdmin(); // store admin only
     if(entry.table==="stores") return isStoreAdmin() && (currentProfile.store_ids||[]).indexOf(entry.row.id)>=0;
@@ -1752,9 +1828,31 @@ function onRemoteChange(p){
     serverRows[key]=e;
     if(prev && prev.table==="shifts" && prev.row.week_key!==e.row.week_key) removeRowFromState(prev);
     putRowInState(e);
+    // A week just (un)shared: its shifts didn't change, so no live event brings or removes them.
+    if(table==="weeks" && !hasAdminAccess()) fetchWeekShifts(e.row.week_key);
   }
   lastSavedJSON=JSON.stringify(state); // a change from someone else is not something to undo here
   scheduleRemoteRender();
+}
+function fetchWeekShifts(weekKey){
+  sb.from("shifts").select(TABLE_COLUMNS.shifts.join(",")).eq("week_key", weekKey).then(function(res){
+    if(res.error){ console.error("fetchWeekShifts failed", res.error); return; }
+    var changed=false, seen={};
+    res.data.forEach(function(r){
+      var e=rowEntry("shifts", r), key="shifts|"+e.key;
+      seen[key]=true;
+      if(serverRows[key] && serverRows[key].json===e.json) return;
+      serverRows[key]=e; putRowInState(e); changed=true;
+    });
+    Object.keys(serverRows).forEach(function(key){
+      var old=serverRows[key];
+      if(old.table!=="shifts" || old.row.week_key!==weekKey || seen[key]) return;
+      delete serverRows[key]; removeRowFromState(old); changed=true;
+    });
+    if(!changed) return;
+    lastSavedJSON=JSON.stringify(state);
+    scheduleRemoteRender();
+  });
 }
 function putRowInState(e){
   var r=e.row, list, i;
@@ -2162,7 +2260,7 @@ function purgeShiftsOnClosedDays(weekKey){
 }
 function materializeFixedPatterns(weekKey){
   var week=getWeek(weekKey);
-  if(week.frozen) return; // a frozen week stays exactly as it was sent
+  if(week.frozen || isWeekHiddenForMe(weekKey)) return; // a frozen week stays exactly as it was sent
   if(purgeShiftsOnClosedDays(weekKey) && week.fixedSynced) saveState();
   if(week.fixedSynced) return;
   // Fully reconcile rather than only fill in blank days: drop any previously materialized
@@ -4647,10 +4745,11 @@ var gridAxisStart=null;
 function renderSchedule(){
   materializeFixedPatterns(state.ui.currentWeekKey);
   refreshCarryOvers();
-  if(getWeek(state.ui.currentWeekKey).needsRebalance && !isWeekFrozen(state.ui.currentWeekKey)) generateDraft(state.ui.currentWeekKey, true); // keeps existing shifts, tops people back up
+  if(getWeek(state.ui.currentWeekKey).needsRebalance && !isWeekFrozen(state.ui.currentWeekKey) && !isWeekHiddenForMe(state.ui.currentWeekKey)) generateDraft(state.ui.currentWeekKey, true); // keeps existing shifts, tops people back up
   renderWeekLabel();
   renderStoreTabs();
   updatePrintButtonLabel();
+  renderShareButton();
   var validation=recomputeValidation(state.ui.currentWeekKey);
   var restricted=currentProfile && currentProfile.role!=="admin";
   renderSummaryBar(restricted && state.ui.currentStoreId ? scopeValidationToStore(validation, state.ui.currentStoreId) : validation);
@@ -5015,6 +5114,7 @@ function attachEmployeeDrop(body, storeId, ds, axisStart, hours, weekKey){
     var empId=draggedEmployeeId; draggedEmployeeId=null;
     if(!empId) return;
     if(isWeekFrozen(weekKey)){ alert(FROZEN_MSG); return; }
+    if(isWeekHiddenForMe(weekKey)) return; // not shared yet
     var dropEmp=getEmployee(empId);
     if(isMandatorilyBlocked(empId, ds)){
       alert((dropEmp?dropEmp.name:"Cet employé")+" a un repos obligatoire ce jour-là. Choisissez un autre jour ou un autre employé.");
@@ -5054,7 +5154,7 @@ function attachEmployeeDrop(body, storeId, ds, axisStart, hours, weekKey){
 
 function startDrag(e, ctx){
   var weekKey=state.ui.currentWeekKey;
-  if(isWeekFrozen(weekKey)) return; // frozen: no moving, resizing or drawing
+  if(isWeekFrozen(weekKey) || isWeekHiddenForMe(weekKey)) return; // frozen (or not shared yet): no moving, resizing or drawing
   var week=getWeek(weekKey);
   var shift = ctx.shiftId ? week.shifts.find(function(s){return s.id===ctx.shiftId;}) : null;
   dragState={
@@ -6726,6 +6826,20 @@ function startApp(){
         if(mode==="compact") doPrintCompact(myPrintStores(), title);
         else doPrint(myPrintStores(), title);
       }, true);
+  });
+  document.getElementById("btn-share").addEventListener("click", function(){
+    var wk=state.ui.currentWeekKey, stores=myPrintStores();
+    var status=weekShareStatus(wk, stores);
+    if(status==="shared"){
+      if(!confirm("Retirer le partage de "+weekDisplay(wk)+" ?\nLes gérants et les employés ne verront plus le planning de cette semaine.")) return;
+      unshareWeek(wk, stores);
+    } else {
+      var msg = status==="changed" ? "Valider les modifications apportées à "+weekDisplay(wk)+" depuis son partage ?" :
+        "Partager le planning de "+weekDisplay(wk)+" ("+stores.map(function(st){ return st.name; }).join(", ")+") ?\nLes gérants et les employés pourront le voir.";
+      if(!confirm(msg)) return;
+      shareWeek(wk, stores);
+    }
+    saveState(); renderSchedule();
   });
   document.getElementById("chk-freeze").addEventListener("change", function(e){
     var week=getWeek(state.ui.currentWeekKey);
