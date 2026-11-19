@@ -6830,16 +6830,17 @@ function startApp(){
   document.getElementById("btn-share").addEventListener("click", function(){
     var wk=state.ui.currentWeekKey, stores=myPrintStores();
     var status=weekShareStatus(wk, stores);
+    // The page's own dialog, not confirm(): some browsers silently answer "Annuler" to confirm().
+    function done(){ saveState(); renderSchedule(); }
     if(status==="shared"){
-      if(!confirm("Retirer le partage de "+weekDisplay(wk)+" ?\nLes gérants et les employés ne verront plus le planning de cette semaine.")) return;
-      unshareWeek(wk, stores);
+      askChoice("Partagé", "Les gérants et les employés voient le planning de "+weekDisplay(wk)+".",
+        [{label:"Retirer le partage", value:"unshare"}], function(){ unshareWeek(wk, stores); done(); });
     } else {
-      var msg = status==="changed" ? "Valider les modifications apportées à "+weekDisplay(wk)+" depuis son partage ?" :
-        "Partager le planning de "+weekDisplay(wk)+" ("+stores.map(function(st){ return st.name; }).join(", ")+") ?\nLes gérants et les employés pourront le voir.";
-      if(!confirm(msg)) return;
-      shareWeek(wk, stores);
+      var text = status==="changed" ? "La semaine "+weekDisplay(wk)+" a été modifiée depuis son partage." :
+        "Les gérants et les employés pourront voir le planning de "+weekDisplay(wk)+" ("+stores.map(function(st){ return st.name; }).join(", ")+").";
+      askChoice("Partager", text,
+        [{label: status==="changed" ? "Valider les modifications" : "Partager la semaine", value:"share"}], function(){ shareWeek(wk, stores); done(); });
     }
-    saveState(); renderSchedule();
   });
   document.getElementById("chk-freeze").addEventListener("change", function(e){
     var week=getWeek(state.ui.currentWeekKey);
