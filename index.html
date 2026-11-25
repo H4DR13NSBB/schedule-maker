@@ -2261,6 +2261,10 @@ function purgeShiftsOnClosedDays(weekKey){
 function materializeFixedPatterns(weekKey){
   var week=getWeek(weekKey);
   if(week.frozen || isWeekHiddenForMe(weekKey)) return; // a frozen week stays exactly as it was sent
+  // An employee only ever sees the shifts the database lets them read. They can't read the weeks
+  // table, so every week looks "not synced" to their page: building fixed patterns here would show
+  // regular schedules in weeks nobody has shared yet.
+  if(currentProfile && currentProfile.role==="employee") return;
   if(purgeShiftsOnClosedDays(weekKey) && week.fixedSynced) saveState();
   if(week.fixedSynced) return;
   // Fully reconcile rather than only fill in blank days: drop any previously materialized
